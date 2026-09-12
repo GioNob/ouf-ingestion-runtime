@@ -2,6 +2,61 @@ openapi: 3.1.0
 info: {title: OUF Ingestion Runtime Trusted Human API, version: 1.0.0}
 servers: [{url: /api/trusted-human/v1/ingestion}]
 paths:
+  /issues:
+    get:
+      operationId: searchIngestionRuntimeIssues
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.search
+      parameters:
+        - {in: query, name: state, schema: {type: string, enum: [OPEN, RESOLVED, DISMISSED]}}
+        - {in: query, name: severity, schema: {type: string, enum: [WARNING, ERROR]}}
+        - {in: query, name: sourceId, schema: {type: string}}
+        - {in: query, name: runId, schema: {type: string, format: uuid}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses: {'200': {description: Tenant-scoped runtime issues without raw payload}, '403': {description: Forbidden}}
+  /issues/schema-observations:
+    get:
+      operationId: searchIngestionSchemaObservations
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.search
+      parameters:
+        - {in: query, name: sourceId, schema: {type: string}}
+        - {in: query, name: outcome, schema: {type: string, enum: [MATCH, COMPATIBLE_ADDITIVE, UNKNOWN_VERSION, INCOMPATIBLE]}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses: {'200': {description: Persisted schema observations}, '403': {description: Forbidden}}
+  /issues/{id}:
+    get:
+      operationId: getIngestionRuntimeIssue
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.read
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: Issue detail and safe evidence references}, '404': {description: Not found in actor tenant}}
+  /issues/{id}/resolve:
+    post:
+      operationId: resolveIngestionRuntimeIssue
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.resolve
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/IssueCloseRequest'}}}}
+      responses: {'204': {description: Resolved and audited}, '409': {description: Optimistic lock or state conflict}}
+  /issues/{id}/dismiss:
+    post:
+      operationId: dismissIngestionRuntimeIssue
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.dismiss
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/IssueCloseRequest'}}}}
+      responses: {'204': {description: Dismissed with reason and audit}, '409': {description: Optimistic lock or state conflict}}
+  /issues/{id}/onboarding-review:
+    post:
+      operationId: requestOnboardingReviewForIssue
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.onboarding-review.request
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReviewRequest'}}}}
+      responses: {'202': {description: Durable review request queued}, '409': {description: State conflict}}
   /quarantine:
     get:
       operationId: searchIngestionQuarantine
@@ -54,6 +109,16 @@ components:
   parameters:
     Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
   schemas:
+    IssueCloseRequest:
+      type: object
+      required: [reason, expectedVersion]
+      properties: {reason: {type: string, minLength: 1, maxLength: 1000}, expectedVersion: {type: integer, minimum: 0}}
+      additionalProperties: false
+    ReviewRequest:
+      type: object
+      required: [expectedVersion]
+      properties: {expectedVersion: {type: integer, minimum: 0}}
+      additionalProperties: false
     ReplayRequest:
       type: object
       required: [targetBundleRef]

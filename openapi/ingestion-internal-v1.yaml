@@ -1,0 +1,23 @@
+openapi: 3.1.0
+info: {title: OUF Ingestion Runtime Internal API, version: 1.0.0}
+servers: [{url: /api/internal/v1/ingestion}]
+paths:
+  /contracts/runs/{runId}:
+    get:
+      operationId: getPinnedContractsForRun
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.contract.read
+      parameters: [{$ref: '#/components/parameters/RunId'}]
+      responses: {'200': {description: Exact historical contract reference chain}, '404': {description: Not found in actor tenant}}
+  /runs/{runId}/lineage:
+    get:
+      operationId: getRunLineage
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.lineage.read
+      parameters:
+        - {$ref: '#/components/parameters/RunId'}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses: {'200': {description: Bounded record lineage and frozen contract references}}
+components:
+  parameters:
+    RunId: {in: path, name: runId, required: true, schema: {type: string, format: uuid}}
