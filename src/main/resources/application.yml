@@ -1,0 +1,13 @@
+spring:
+  application.name: ouf-ingestion-runtime
+  datasource:
+    url: ${OUF_ING_DB_URL}
+    username: ${OUF_ING_DB_USER}
+    password: ${OUF_ING_DB_PASSWORD}
+  flyway:
+    schemas: ouf_ingestion
+    default-schema: ouf_ingestion
+    create-schemas: true
+management:
+  endpoints.web.exposure.include: health,info,prometheus,metrics
+server.port: ${PORT:8080}

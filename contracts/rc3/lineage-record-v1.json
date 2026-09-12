@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/ingestion/lineage-record-v1.json",
+  "title": "OUF LineageRecord v1",
+  "description": "Minimum ingestion evidence linking source provenance, acquisition, pinned contracts, processing, data hashes/references, timing, trace and outcome. Field-level draft reconciled against Ingestion Runtime v1.2.",
+  "type": "object",
+  "required": [
+    "lineageId",
+    "ingestionRunId",
+    "ingestionId",
+    "handoffId",
+    "source",
+    "contracts",
+    "processing",
+    "data",
+    "times",
+    "outcome"
+  ],
+  "properties": {
+    "lineageId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of this lineage evidence."
+    },
+    "ingestionRunId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Run that produced the record."
+    },
+    "ingestionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity of the canonical envelope/record produced by Ingestion."
+    },
+    "handoffId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Idempotent downstream handoff identity correlated with this evidence."
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "sourceId",
+        "typeCode",
+        "sourceObjectId"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "typeCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceObjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "contracts": {
+      "type": "object",
+      "required": [
+        "sourceSchemaRef",
+        "bundleRef",
+        "semanticPublicationSetRef",
+        "adapterProfileRef"
+      ],
+      "properties": {
+        "sourceSchemaRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bundleRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "semanticPublicationSetRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapterProfileRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "description": "Pinned historical contract references. They must remain resolvable for supported replay/audit."
+    },
+    "processing": {
+      "type": "object",
+      "required": [
+        "pipelineVersion"
+      ],
+      "properties": {
+        "pipelineVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transformationIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "validationResultRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processingAttemptId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional attempt/replay identity; included because v1.2 explicitly associates processingAttemptId with lineage/quarantine."
+        }
+      },
+      "additionalProperties": false
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "rawObjectRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rawHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "normalizedHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "times": {
+      "type": "object",
+      "required": [
+        "acquiredAt"
+      ],
+      "properties": {
+        "acquiredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "processedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "handedOffAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "trace": {
+      "type": "object",
+      "properties": {
+        "correlationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "traceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "outcome": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "SUCCESS",
+            "QUARANTINED",
+            "TOMBSTONE",
+            "FAILED"
+          ]
+        },
+        "issueRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Ingestion Runtime v1.2 §47",
+    "Ingestion Runtime v1.2 §47.1",
+    "Ingestion Runtime v1.2 §48",
+    "Ingestion Runtime v1.2 §51",
+    "Ingestion Runtime v1.2 §53",
+    "Ingestion Runtime v1.2 §125"
+  ],
+  "x-ouf-scope-control": "This revision reconciles LineageRecord only. It does not modify HandoffPayload, CanonicalDataEnvelope, replay request/response DTOs, quarantine schemas, UDP lineage index structures or any source-provider contract."
+}

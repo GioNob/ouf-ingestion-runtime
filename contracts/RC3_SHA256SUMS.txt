@@ -1,0 +1,6 @@
+e565ca0657172de0f80251204a1eaea75072932acb3b2479ed84daae616ef769  contracts/rc3/canonical-data-envelope-v1.json
+1c8f6bd16905c6ec6ef8af8fa003bac05e809257b4e7a3f7a142a284c844dab6  contracts/rc3/handoff-payload-v1.json
+774e6db9225e1c07ef527e7a5cd3ad01eee60ddb9ed175f69ce9c8a78839fb67  contracts/rc3/job-status-v1.json
+dfd3b88cff20de43e5d5ed233e614c04727e50210a7a8e03156507ccd52b4f13  contracts/rc3/lineage-record-v1.json
+1c9606867e063947fce0f640907f3aee553547d4bb3d76e306df319d190aa824  contracts/rc3/source-object-identity-policy-v1.json
+9e9e009122d86d1427c34c5cd7ca94c2ff7eb0325b85e3545cf860820ad622f8  contracts/rc3/source-runtime-profile-v1.json

@@ -1,0 +1,8 @@
+package it.comune.trieste.ouf.ingestion;
+import static org.assertj.core.api.Assertions.*;import java.util.*;import org.junit.jupiter.api.Test;import org.springframework.beans.factory.annotation.Autowired;import org.springframework.boot.test.context.SpringBootTest;import org.springframework.jdbc.core.simple.JdbcClient;import org.springframework.test.context.*;
+@SpringBootTest class Postgres17RuntimeTest {
+ @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
+ @Autowired JdbcClient sql;
+ @Test void migrationsCreateDurableStateAndImmutableHistory(){UUID run=UUID.randomUUID(),attempt=UUID.randomUUID();sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id) values(:r,'s','b','1','sha256:x','MANAGED_ONCE','READY','c')").param("r",run).update();sql.sql("insert into ouf_ingestion.processing_attempt values(:a,:r,'row:1',1,'managed-csv','1','SUCCEEDED',null,transaction_timestamp())").param("a",attempt).param("r",run).update();assertThatThrownBy(()->sql.sql("delete from ouf_ingestion.processing_attempt where attempt_id=:a").param("a",attempt).update()).hasStackTraceContaining("append-only");assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox").query(Long.class).single()).isZero();}
+ private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
+}
