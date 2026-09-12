@@ -1,0 +1,22 @@
+package it.comune.trieste.ouf.ingestion;
+
+import java.time.Duration;
+import java.util.*;
+import org.slf4j.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.stereotype.Service;
+
+@Service
+@ConditionalOnBean({RuntimePorts.AdapterResolver.class,RuntimePorts.DataLakePort.class})
+public final class RunExecutionWorker {
+  private static final Logger LOG=LoggerFactory.getLogger(RunExecutionWorker.class);
+  private final RunExecutionRepository runs;private final RuntimePorts.AdapterResolver adapters;private final CanonicalRecordPipeline pipeline;
+  public RunExecutionWorker(RunExecutionRepository runs,RuntimePorts.AdapterResolver adapters,CanonicalRecordPipeline pipeline){this.runs=runs;this.adapters=adapters;this.pipeline=pipeline;}
+  public Optional<UUID> executeOne(String worker){var claimed=runs.claim(worker,Duration.ofMinutes(2));if(claimed.isEmpty()){runs.completeDrained();return Optional.empty();}var claim=claimed.orElseThrow();try{ExecutionBundle bundle=runs.bundle(claim.runId());var context=runs.context(claim.runId());AdapterSpi adapter=adapters.resolve(bundle);verifyAdapter(adapter,bundle);boolean exhausted=false;try(AdapterSpi.RecordCursor cursor=adapter.open(bundle,new AdapterSpi.Checkpoint(claim.checkpoint()))){for(int count=0;count<100;count++){var next=cursor.next();if(next.isEmpty()){exhausted=true;break;}AdapterSpi.SourceRecord record=next.orElseThrow();var result=pipeline.process(new CanonicalRecordPipeline.Command(claim.runId(),claim.partitionKey(),record.ordinal(),1,adapter.adapterId(),bundle,record,context.correlationId(),cursor.checkpoint().value(),Map.of("ordinal",record.ordinal())));if(!result.succeeded()){runs.pause(claim,"ING_RECORD_QUARANTINED");log("INGESTION_RUN_PAUSED",claim,context,"ING_RECORD_QUARANTINED");return Optional.of(claim.runId());}}}if(exhausted)runs.inputExhausted(claim);else runs.release(claim);runs.completeDrained();log(exhausted?"INGESTION_INPUT_EXHAUSTED":"INGESTION_BATCH_COMPLETED",claim,context,null);return Optional.of(claim.runId());}catch(RuntimeException e){String code=safe(e);runs.pause(claim,code);var context=runs.context(claim.runId());log("INGESTION_RUN_PAUSED",claim,context,code);return Optional.of(claim.runId());}}
+  private static void verifyAdapter(AdapterSpi adapter,ExecutionBundle bundle){String expected=required(bundle.configuration(),"adapterId");String version=required(bundle.configuration(),"adapterRuntimeVersion");if(!expected.equals(adapter.adapterId()))throw new IllegalStateException("ING_ADAPTER_ID_MISMATCH");AdapterSpi.Compatibility c=adapter.compatibility();if(compare(version,c.oldestReadableBundleVersion())<0||compare(version,c.current())>0)throw new IllegalStateException("ING_ADAPTER_VERSION_UNSUPPORTED");}
+  private static int compare(String a,String b){int[] x=parse(a),y=parse(b);for(int i=0;i<3;i++){int c=Integer.compare(x[i],y[i]);if(c!=0)return c;}return 0;}
+  private static int[] parse(String value){String[] p=value.split("\\.");if(p.length!=3)throw new IllegalStateException("ING_ADAPTER_VERSION_INVALID");try{return new int[]{Integer.parseInt(p[0]),Integer.parseInt(p[1]),Integer.parseInt(p[2])};}catch(NumberFormatException e){throw new IllegalStateException("ING_ADAPTER_VERSION_INVALID");}}
+  private static String required(Map<String,Object> c,String key){Object v=c.get(key);if(v==null||String.valueOf(v).isBlank())throw new IllegalStateException("ING_ADAPTER_CONFIG_MISSING");return String.valueOf(v);}
+  private static String safe(RuntimeException e){String m=e.getMessage();return m!=null&&m.matches("ING_[A-Z0-9_]{1,76}")?m:"ING_EXECUTION_FAILED";}
+  private static void log(String event,RunExecutionRepository.Claim c,RunExecutionRepository.RunContext x,String code){var l=code==null?LOG.atInfo():LOG.atWarn();l.addKeyValue("event",event).addKeyValue("runId",c.runId()).addKeyValue("sourceId",x.sourceId()).addKeyValue("correlationId",x.correlationId()).addKeyValue("errorCode",code).log("Ingestion execution state changed");}
+}

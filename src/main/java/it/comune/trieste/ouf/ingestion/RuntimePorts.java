@@ -2,6 +2,7 @@ package it.comune.trieste.ouf.ingestion;
 import java.util.*;
 public final class RuntimePorts {private RuntimePorts(){}
   public interface ActiveBundlePort {ExecutionBundle loadAndVerify(String sourceId);}
+  public interface AdapterResolver {AdapterSpi resolve(ExecutionBundle bundle);}
   public interface GatewaySourcePort {byte[] fetch(String governedBindingRef,Map<String,Object> request,String correlationId);}
   public static final class GatewayFailure extends RuntimeException {
     private final String safeCode;private final AdapterSpi.ErrorClass errorClass;

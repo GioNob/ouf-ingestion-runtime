@@ -1,0 +1,27 @@
+package it.comune.trieste.ouf.ingestion;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.util.*;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+@Repository
+public final class RunExecutionRepository {
+  private final JdbcClient sql;private final ObjectMapper json;
+  public RunExecutionRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
+  @Transactional public Optional<Claim> claim(String worker,Duration lease){return sql.sql("with candidate as (select p.run_id,p.partition_key from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where r.state='RUNNING' and p.state='RUNNING' and (p.lease_until is null or p.lease_until<transaction_timestamp()) order by r.created_at,p.partition_key for update of p skip locked limit 1) update ouf_ingestion.ing_partition p set lease_owner=:w,lease_until=transaction_timestamp()+(:ms*interval '1 millisecond'),lease_generation=lease_generation+1 from candidate c where p.run_id=c.run_id and p.partition_key=c.partition_key returning p.run_id,p.partition_key,p.checkpoint_json::text,p.lease_generation")
+    .param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new Claim(rs.getObject(1,UUID.class),rs.getString(2),decodeMap(rs.getString(3)),rs.getLong(4),worker)).optional();}
+  public ExecutionBundle bundle(UUID run){String raw=sql.sql("select snapshot_json::text from ouf_ingestion.runtime_configuration_snapshot where run_id=:r").param("r",run).query(String.class).single();try{return json.readValue(raw,ExecutionBundle.class);}catch(Exception e){throw new IllegalStateException("ING_BUNDLE_SNAPSHOT_INVALID",e);}}
+  public RunContext context(UUID run){return sql.sql("select source_id,correlation_id from ouf_ingestion.ing_run where run_id=:r").param("r",run).query((rs,n)->new RunContext(rs.getString(1),rs.getString(2))).single();}
+  @Transactional public void release(Claim c){owned(c,"update ouf_ingestion.ing_partition set lease_owner=null,lease_until=null where run_id=:r and partition_key=:p and lease_owner=:w and lease_generation=:g");}
+  @Transactional public void pause(Claim c,String code){owned(c,"update ouf_ingestion.ing_partition set state='PAUSED',lease_owner=null,lease_until=null where run_id=:r and partition_key=:p and lease_owner=:w and lease_generation=:g");sql.sql("update ouf_ingestion.ing_run set state='PAUSED',failure_code=:c,updated_at=transaction_timestamp() where run_id=:r and state='RUNNING'").param("c",safe(code)).param("r",c.runId()).update();}
+  @Transactional public void inputExhausted(Claim c){owned(c,"update ouf_ingestion.ing_partition set state='DRAINING',lease_owner=null,lease_until=null where run_id=:r and partition_key=:p and lease_owner=:w and lease_generation=:g");sql.sql("update ouf_ingestion.ing_run set state='DRAINING',updated_at=transaction_timestamp() where run_id=:r and state='RUNNING' and not exists(select 1 from ouf_ingestion.ing_partition where run_id=:r and state<>'DRAINING')").param("r",c.runId()).update();}
+  @Transactional public int completeDrained(){sql.sql("update ouf_ingestion.ing_partition p set state='SUCCEEDED' where p.state='DRAINING' and exists(select 1 from ouf_ingestion.ing_run r where r.run_id=p.run_id and r.state='DRAINING') and not exists(select 1 from ouf_ingestion.handoff_outbox h where h.run_id=p.run_id and h.partition_key=p.partition_key and h.state<>'ACKED')").update();return sql.sql("update ouf_ingestion.ing_run r set state='SUCCEEDED',updated_at=transaction_timestamp() where r.state='DRAINING' and not exists(select 1 from ouf_ingestion.ing_partition p where p.run_id=r.run_id and p.state<>'SUCCEEDED')").update();}
+  private void owned(Claim c,String statement){int n=sql.sql(statement).param("r",c.runId()).param("p",c.partitionKey()).param("w",c.worker()).param("g",c.generation()).update();if(n!=1)throw new IllegalStateException("ING_PARTITION_LEASE_LOST");}
+  @SuppressWarnings("unchecked")private Map<String,Object> decodeMap(String raw){try{return json.readValue(raw,Map.class);}catch(Exception e){throw new IllegalStateException("ING_CHECKPOINT_INVALID",e);}}
+  private static String safe(String code){return code!=null&&code.matches("ING_[A-Z0-9_]{1,76}")?code:"ING_EXECUTION_FAILED";}
+  public record Claim(UUID runId,String partitionKey,Map<String,Object> checkpoint,long generation,String worker){}
+  public record RunContext(String sourceId,String correlationId){}
+}
