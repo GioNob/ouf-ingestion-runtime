@@ -1,0 +1,39 @@
+openapi: 3.1.0
+info: {title: OUF Ingestion Runtime Trusted Human API, version: 1.0.0}
+servers: [{url: /api/trusted-human/v1/ingestion}]
+paths:
+  /quarantine:
+    get:
+      operationId: searchIngestionQuarantine
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.quarantine.read
+      parameters:
+        - {in: query, name: state, schema: {type: string, enum: [OPEN, REPLAY_REQUESTED, RELEASED, REJECTED]}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses: {'200': {description: Redacted quarantine list}, '403': {description: Trusted HUMAN_USER context or capability missing}}
+  /quarantine/{id}:
+    get:
+      operationId: getIngestionQuarantine
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.quarantine.read
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: Redacted quarantine detail}, '403': {description: Forbidden}}
+  /quarantine/{id}/replay:
+    post:
+      operationId: replayIngestionQuarantine
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.quarantine.replay
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}
+      responses: {'202': {description: Replay request durably queued}, '403': {description: Forbidden}, '409': {description: Item is not open}}
+components:
+  parameters:
+    Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+  schemas:
+    ReplayRequest:
+      type: object
+      required: [targetBundleRef]
+      properties: {targetBundleRef: {type: string, minLength: 1}}
+      additionalProperties: false

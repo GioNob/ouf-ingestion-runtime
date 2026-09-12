@@ -1,0 +1,10 @@
+<configuration>
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <includeMdc>true</includeMdc>
+      <includeKeyValuePairs>true</includeKeyValuePairs>
+      <customFields>{"service":"ouf-ingestion-runtime"}</customFields>
+    </encoder>
+  </appender>
+  <root level="INFO"><appender-ref ref="JSON"/></root>
+</configuration>
