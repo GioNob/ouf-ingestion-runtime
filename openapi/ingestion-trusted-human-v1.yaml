@@ -31,6 +31,13 @@ paths:
       x-ouf-authorization-capability: ouf.ingestion.issue.read
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses: {'200': {description: Issue detail and safe evidence references}, '404': {description: Not found in actor tenant}}
+  /issues/{id}/explain:
+    get:
+      operationId: explainIngestionRuntimeIssue
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.explain
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: Deterministic safe explanation and recommended action}, '404': {description: Not found in actor tenant}}
   /issues/{id}/resolve:
     post:
       operationId: resolveIngestionRuntimeIssue
@@ -63,7 +70,7 @@ paths:
       x-ouf-mcp-tool-eligible: false
       x-ouf-authorization-capability: ingestion.quarantine.read
       parameters:
-        - {in: query, name: state, schema: {type: string, enum: [OPEN, REPLAY_REQUESTED, RELEASED, REJECTED]}}
+        - {in: query, name: state, schema: {type: string, enum: [OPEN, RETRY_READY, REPROCESSING, RESOLVED, DISMISSED, SUPERSEDED]}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
       responses: {'200': {description: Redacted quarantine list}, '403': {description: Trusted HUMAN_USER context or capability missing}}
   /quarantine/{id}:
@@ -83,6 +90,40 @@ paths:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}
       responses: {'202': {description: Replay request durably queued}, '403': {description: Forbidden}, '409': {description: Item is not open}}
+  /quarantine/{id}/preview:
+    get:
+      operationId: inspectIngestionQuarantineSafely
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-authorization-capability: ouf.ingestion.quarantine.inspect
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: Tenant-scoped preview with object fingerprint and no raw payload}, '404': {description: Not found in actor tenant}}
+  /quarantine/{id}/reprocess:
+    post:
+      operationId: reprocessIngestionQuarantine
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.quarantine.reprocess
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}}
+      responses: {'202': {description: Durable reprocessing queued}, '409': {description: Lifecycle conflict}}
+  /quarantine/{id}/dismiss:
+    post:
+      operationId: dismissIngestionQuarantine
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.dismiss
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/QuarantineCloseRequest'}}}}
+      responses: {'204': {description: Dismissed and audited}, '409': {description: Lifecycle conflict}}
+  /quarantine/{id}/supersede:
+    post:
+      operationId: supersedeIngestionQuarantine
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.issue.dismiss
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/QuarantineCloseRequest'}}}}
+      responses: {'204': {description: Superseded and audited}, '409': {description: Lifecycle conflict}}
   /quarantine/replays/{replayId}:
     get:
       operationId: getIngestionReplay
@@ -123,6 +164,14 @@ components:
       type: object
       required: [targetBundleRef]
       properties: {targetBundleRef: {type: string, minLength: 1}}
+      additionalProperties: false
+    QuarantineCloseRequest:
+      type: object
+      required: [reason, expectedVersion]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 1000}
+        supersededBy: {type: string, minLength: 1}
+        expectedVersion: {type: integer, minimum: 0}
       additionalProperties: false
     LogQuery:
       type: object
