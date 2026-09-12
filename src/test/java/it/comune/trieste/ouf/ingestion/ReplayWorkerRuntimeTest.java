@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,6 +14,7 @@ import org.springframework.test.context.*;
 @SpringBootTest class ReplayWorkerRuntimeTest {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
   @Autowired ReplayRepository replays;@Autowired QuarantineService quarantine;@Autowired IngestionMetrics metrics;@Autowired JdbcClient sql;
+  @BeforeEach void isolateReplayQueue(){sql.sql("update ouf_ingestion.replay_execution set state='CANCELLED',claimed_by=null,lease_until=null,completed_at=transaction_timestamp() where state in ('QUEUED','RUNNING','RETRY_WAIT')").update();}
   @Test void durableReplayCreatesNewAttemptHistoryAndReleasesQuarantine(){Fixture f=fixture();AtomicInteger calls=new AtomicInteger();RuntimePorts.ReplayExecutionPort executor=(replay,q,bundle,corr)->{calls.incrementAndGet();UUID attempt=UUID.randomUUID();sql.sql("insert into ouf_ingestion.processing_attempt(attempt_id,run_id,source_object_id,attempt_no,adapter_id,bundle_version,state) values(:a,:r,'object',2,'replay','2','SUCCEEDED')").param("a",attempt).param("r",f.run).update();return new RuntimePorts.ReplayExecutionPort.Receipt(attempt,"receipt://durable",true);};assertThat(new ReplayWorker(replays,executor,metrics).executeOne("worker")).isTrue();assertThat(calls).hasValue(1);assertThat(replays.view(f.replay)).containsEntry("state","SUCCEEDED").containsEntry("attempts",1);assertThat(quarantine.get(f.quarantine)).containsEntry("state","RELEASED");assertThat(sql.sql("select outcome from ouf_ingestion.replay_attempt where replay_id=:r order by created_at").param("r",f.replay).query(String.class).list()).containsExactly("STARTED","SUCCEEDED");}
   @Test void failureIsRetryableAndDoesNotReleaseQuarantine(){Fixture f=fixture();RuntimePorts.ReplayExecutionPort executor=(r,q,b,c)->{throw new RuntimeException("sensitive downstream text");};new ReplayWorker(replays,executor,metrics).executeOne("worker");assertThat(replays.view(f.replay)).containsEntry("state","RETRY_WAIT").containsEntry("last_error_code","ING_REPLAY_EXECUTION_FAILED");assertThat(quarantine.get(f.quarantine)).containsEntry("state","REPLAY_REQUESTED");assertThat(sql.sql("select safe_error_code from ouf_ingestion.replay_attempt where replay_id=:r and outcome='FAILED_RETRYABLE'").param("r",f.replay).query(String.class).single()).isEqualTo("ING_REPLAY_EXECUTION_FAILED");}
   @Test void competingWorkerCannotClaimActiveLease(){Fixture f=fixture();assertThat(replays.claim("one",Duration.ofMinutes(5))).isPresent();assertThat(replays.claim("two",Duration.ofMinutes(5))).isEmpty();assertThat(replays.view(f.replay)).containsEntry("state","RUNNING");}
