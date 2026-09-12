@@ -13,6 +13,9 @@ import org.springframework.test.context.*;
 @SpringBootTest class CanonicalRecordPipelineRuntimeTest {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
   @Autowired ObjectMapper json;@Autowired FrozenContractValidator validator;@Autowired DurablePipelineRepository durable;@Autowired QuarantineService quarantine;@Autowired JdbcClient sql;
+  private final List<UUID> createdRuns=new ArrayList<>();
+
+  @AfterEach void removeClaimableOutboxFromSharedDatabase(){for(UUID run:createdRuns)sql.sql("update ouf_ingestion.handoff_outbox set state='ACKED',acked_at=transaction_timestamp() where run_id=:r and state<>'ACKED'").param("r",run).update();createdRuns.clear();}
 
   @Test void persistsThreeZonesAndStagesContractAlignedHandoff(){
     UUID run=run();RecordingLake lake=new RecordingLake();CanonicalRecordPipeline pipeline=pipeline(lake);
@@ -35,7 +38,7 @@ import org.springframework.test.context.*;
 
   private CanonicalRecordPipeline pipeline(RuntimePorts.DataLakePort lake){return new CanonicalRecordPipeline(json,validator,durable,quarantine,lake,Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"),ZoneOffset.UTC));}
   private CanonicalRecordPipeline.Command command(UUID run,Map<String,Object> payload,List<Map<String,Object>> mappings){Map<String,Object> cfg=new LinkedHashMap<>(Map.of("sourceSchemaRef","schema:places:1","sourceSchemaId","places","sourceSchemaVersion","1","typeCode","place","semanticPublicationSetRef","sem:1","adapterProfileRef","adapter:managed:1","observationPolicy","ACQUISITION_TIME","propertyMappings",mappings,"mappingRefs",List.of("mapping:places:1")));ExecutionBundle b=new ExecutionBundle("bundle","1","sha256:bundle","source-1","INTERNAL_MANAGED_CSV","managed:object",cfg);AdapterSpi.SourceRecord record=new AdapterSpi.SourceRecord("object-1",1,payload,Map.of("managedObjectRef","managed:object"));return new CanonicalRecordPipeline.Command(run,"default",1,1,"managed-tabular-v1",b,record,"corr-1",Map.of("ordinal",1),Map.of("ordinal",1));}
-  private UUID run(){UUID r=UUID.randomUUID();sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id) values(:r,'source-1','bundle','1','sha256:bundle','MANAGED_ONCE','RUNNING','corr-1')").param("r",r).update();sql.sql("insert into ouf_ingestion.ing_partition(run_id,partition_key,state) values(:r,'default','RUNNING')").param("r",r).update();return r;}
+  private UUID run(){UUID r=UUID.randomUUID();createdRuns.add(r);sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id) values(:r,'source-1','bundle','1','sha256:bundle','MANAGED_ONCE','RUNNING','corr-1')").param("r",r).update();sql.sql("insert into ouf_ingestion.ing_partition(run_id,partition_key,state) values(:r,'default','RUNNING')").param("r",r).update();return r;}
   private static Map<String,Object> mapping(String source,String target){return Map.of("sourceField",source,"targetPropertyIri",target,"transform","IDENTITY");}
   private static String string(Map<String,Object> row,String key){return String.valueOf(row.get(key));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
