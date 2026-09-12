@@ -1,0 +1,32 @@
+package it.comune.trieste.ouf.ingestion;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.*;
+import java.util.*;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+@Repository
+public class RunStateRepository {
+  private final JdbcClient sql;private final ObjectMapper json;
+  public RunStateRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
+
+  @Transactional public Optional<ScheduleClaim> claimDue(String worker,Duration lease){
+    return sql.sql("with tenant_head as (select distinct on(tenant_id) schedule_id,tenant_id,next_run_at,last_dispatched_at from ouf_ingestion.ing_schedule s where state='ACTIVE' and next_run_at<=transaction_timestamp() and (lease_until is null or lease_until<transaction_timestamp()) and not exists(select 1 from ouf_ingestion.source_health h where h.source_id=s.source_id and h.status='PAUSED' and h.circuit_open_until>transaction_timestamp()) and not exists(select 1 from ouf_ingestion.ing_run r where r.source_id=s.source_id and r.state in ('READY','PREFLIGHT','RUNNING','DRAINING')) order by tenant_id,next_run_at), candidate as (select s.schedule_id from ouf_ingestion.ing_schedule s join tenant_head h using(schedule_id) order by h.last_dispatched_at nulls first,h.next_run_at,h.tenant_id for update of s skip locked limit 1) update ouf_ingestion.ing_schedule s set lease_owner=:w,lease_until=transaction_timestamp()+(:ms*interval '1 millisecond'),last_dispatched_at=transaction_timestamp(),lock_version=lock_version+1 from candidate c where s.schedule_id=c.schedule_id returning s.schedule_id,s.tenant_id,s.source_id,s.interval_seconds")
+      .param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new ScheduleClaim(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getInt(4),worker)).optional();
+  }
+  @Transactional public void releaseSchedule(ScheduleClaim c,boolean advance){int changed=sql.sql("update ouf_ingestion.ing_schedule set next_run_at=case when :a then transaction_timestamp()+(interval_seconds*interval '1 second') else transaction_timestamp()+interval '60 seconds' end,lease_owner=null,lease_until=null,lock_version=lock_version+1 where schedule_id=:i and lease_owner=:w").param("a",advance).param("i",c.scheduleId()).param("w",c.worker()).update();if(changed!=1)throw new IllegalStateException("ING_SCHEDULE_LEASE_LOST");}
+
+  @Transactional public UUID createPreflightRun(ScheduleClaim claim,ExecutionBundle b,String correlation){UUID run=UUID.randomUUID();String phase=phase(b.acquisitionMode());sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id,tenant_id,phase) values(:r,:s,:b,:v,:h,:m,'PREFLIGHT',:c,:t,:p)").param("r",run).param("s",claim.sourceId()).param("b",b.bundleId()).param("v",b.bundleVersion()).param("h",b.checksum()).param("m",mode(phase)).param("c",correlation).param("t",claim.tenantId()).param("p",phase).update();sql.sql("insert into ouf_ingestion.ing_partition(run_id,partition_key,state) values(:r,'default','PREFLIGHT')").param("r",run).update();return run;}
+  @Transactional public void preflightSucceeded(UUID run){transition(run,"PREFLIGHT","RUNNING",null);sql.sql("update ouf_ingestion.ing_partition set state='RUNNING' where run_id=:r and state='PREFLIGHT'").param("r",run).update();}
+  @Transactional public void preflightFailed(UUID run,String code){transition(run,"PREFLIGHT","FAILED",safe(code));sql.sql("update ouf_ingestion.ing_partition set state='FAILED' where run_id=:r and state='PREFLIGHT'").param("r",run).update();}
+  @Transactional public void advancePhase(UUID run,String target){Map<String,Object> row=sql.sql("select phase,state from ouf_ingestion.ing_run where run_id=:r for update").param("r",run).query().singleRow();String current=String.valueOf(row.get("phase"));if(!"RUNNING".equals(row.get("state"))||!(current.equals("FULL_SNAPSHOT")&&target.equals("CATCH_UP")||current.equals("CATCH_UP")&&target.equals("DELTA")))throw new IllegalStateException("ING_PHASE_TRANSITION_INVALID");sql.sql("update ouf_ingestion.ing_run set phase=:p,updated_at=transaction_timestamp() where run_id=:r").param("p",target).param("r",run).update();}
+  @Transactional public void recordHealth(String source,boolean success,String code){if(success){sql.sql("insert into ouf_ingestion.source_health(source_id,status,consecutive_failures,last_error_code) values(:s,'HEALTHY',0,null) on conflict(source_id) do update set status='HEALTHY',consecutive_failures=0,circuit_open_until=null,last_error_code=null,updated_at=transaction_timestamp()").param("s",source).update();return;}sql.sql("insert into ouf_ingestion.source_health(source_id,status,consecutive_failures,circuit_open_until,last_error_code) values(:s,'DEGRADED',1,null,:c) on conflict(source_id) do update set consecutive_failures=source_health.consecutive_failures+1,status=case when source_health.consecutive_failures+1>=5 then 'PAUSED' else 'DEGRADED' end,circuit_open_until=case when source_health.consecutive_failures+1>=5 then transaction_timestamp()+interval '15 minutes' else null end,last_error_code=:c,updated_at=transaction_timestamp()").param("s",source).param("c",safe(code)).update();}
+  public Map<String,Object> run(UUID run){return sql.sql("select run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,phase,failure_code,tenant_id,correlation_id,created_at,updated_at from ouf_ingestion.ing_run where run_id=:r").param("r",run).query().singleRow();}
+  private void transition(UUID run,String from,String to,String code){int n=sql.sql("update ouf_ingestion.ing_run set state=:t,failure_code=:c,updated_at=transaction_timestamp() where run_id=:r and state=:f").param("t",to).param("c",code).param("r",run).param("f",from).update();if(n!=1)throw new IllegalStateException("ING_RUN_TRANSITION_INVALID");}
+  private static String phase(String acquisition){return switch(acquisition){case "INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
+  private static String mode(String phase){return switch(phase){case "MANAGED_ONCE"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
+  private static String safe(String code){return code!=null&&code.matches("[A-Z0-9_]{1,80}")?code:"ING_INTERNAL_FAILURE";}
+  public record ScheduleClaim(UUID scheduleId,String tenantId,String sourceId,int intervalSeconds,String worker){}
+}
