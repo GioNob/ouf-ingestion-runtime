@@ -36,6 +36,20 @@ paths:
       parameters:
         - {in: path, name: replayId, required: true, schema: {type: string, format: uuid}}
       responses: {'200': {description: Replay execution status without payload or downstream receipt}, '403': {description: Forbidden}}
+  /logs/search:
+    post:
+      operationId: searchProtectedIngestionLogs
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.log.read
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LogQuery'}}}}
+      responses: {'200': {description: Bounded and server-redacted operational events}, '403': {description: Forbidden}}
+  /logs/aggregate:
+    post:
+      operationId: aggregateProtectedIngestionLogs
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.log.aggregate
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [query, dimension], properties: {query: {$ref: '#/components/schemas/LogQuery'}, dimension: {type: string, enum: [severity, event_type, source_id]}}}}}}
+      responses: {'200': {description: Bounded server-side aggregation}, '403': {description: Forbidden}}
 components:
   parameters:
     Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
@@ -44,4 +58,17 @@ components:
       type: object
       required: [targetBundleRef]
       properties: {targetBundleRef: {type: string, minLength: 1}}
+      additionalProperties: false
+    LogQuery:
+      type: object
+      required: [from, to, purpose]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        severity: {type: string, enum: [INFO, WARN, ERROR]}
+        correlationId: {type: string}
+        runId: {type: string, format: uuid}
+        sourceId: {type: string}
+        limit: {type: integer, minimum: 1, maximum: 200}
+        purpose: {type: string, minLength: 1, maxLength: 500}
       additionalProperties: false
