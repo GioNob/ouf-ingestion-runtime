@@ -28,6 +28,14 @@ paths:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}
       responses: {'202': {description: Replay request durably queued}, '403': {description: Forbidden}, '409': {description: Item is not open}}
+  /quarantine/replays/{replayId}:
+    get:
+      operationId: getIngestionReplay
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.replay.read
+      parameters:
+        - {in: path, name: replayId, required: true, schema: {type: string, format: uuid}}
+      responses: {'200': {description: Replay execution status without payload or downstream receipt}, '403': {description: Forbidden}}
 components:
   parameters:
     Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
