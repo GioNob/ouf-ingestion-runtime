@@ -16,7 +16,12 @@ public class DurablePipelineRepository {
   /** Persists attempt, lineage, handoff and restart checkpoint in one short transaction. */
   @Transactional
   public UUID stage(StageCommand c){
-    UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID(),checkpoint=UUID.randomUUID();
+    return stage(c,UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID());
+  }
+
+  @Transactional
+  public UUID stage(StageCommand c,UUID attempt,UUID lineage,UUID handoff){
+    UUID checkpoint=UUID.randomUUID();
     sql.sql("insert into ouf_ingestion.processing_attempt(attempt_id,run_id,source_object_id,attempt_no,adapter_id,bundle_version,state) values(:a,:r,:o,:n,:ad,:bv,'SUCCEEDED')")
       .param("a",attempt).param("r",c.runId).param("o",c.sourceObjectId).param("n",c.attemptNo).param("ad",c.adapterId).param("bv",c.bundleVersion).update();
     sql.sql("insert into ouf_ingestion.ing_lineage(lineage_id,run_id,attempt_id,source_object_id,bundle_ref,adapter_ref,evidence_json) values(:l,:r,:a,:o,:b,:ad,cast(:e as jsonb))")
@@ -28,6 +33,14 @@ public class DurablePipelineRepository {
     sql.sql("update ouf_ingestion.ing_partition set checkpoint_json=cast(:v as jsonb),lock_version=lock_version+1 where run_id=:r and partition_key=:pk")
       .param("v",encode(c.restartCheckpoint)).param("r",c.runId).param("pk",c.partitionKey).update();
     return handoff;
+  }
+
+  @Transactional
+  public UUID recordFailure(UUID runId,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String reasonCode){
+    UUID attempt=UUID.randomUUID();
+    sql.sql("insert into ouf_ingestion.processing_attempt(attempt_id,run_id,source_object_id,attempt_no,adapter_id,bundle_version,state,reason_code) values(:a,:r,:o,:n,:ad,:bv,'FAILED',:c)")
+      .param("a",attempt).param("r",runId).param("o",sourceObjectId).param("n",attemptNo).param("ad",adapterId).param("bv",bundleVersion).param("c",reasonCode).update();
+    return attempt;
   }
 
   /** Claim transaction ends before the remote call. SKIP LOCKED supports competing workers. */

@@ -9,6 +9,11 @@ public final class RuntimePorts {private RuntimePorts(){}
     public String safeCode(){return safeCode;}public AdapterSpi.ErrorClass errorClass(){return errorClass;}
   }
   public interface ManagedObjectPort {byte[] read(String objectRef,long expectedSize,String expectedHash);}
+  public interface DataLakePort {
+    Receipt persist(Zone zone,UUID runId,String sourceObjectId,byte[] content,String contentHash,String idempotencyKey);
+    enum Zone { RAW, NORMALIZED, CURATED }
+    record Receipt(String objectRef,boolean durable){public Receipt{if(objectRef==null||objectRef.isBlank())throw new IllegalArgumentException("ING_DATALAKE_REF_REQUIRED");}}
+  }
   public interface SemanticPort {void preflight(Collection<String> pinnedReferences);}
   public interface DurableHandoffPort {Receipt deliver(UUID handoffId,Map<String,Object> payload,String idempotencyKey);record Receipt(String reference,boolean durable){}}
   public interface ReplayExecutionPort {Receipt execute(UUID replayId,UUID quarantineId,String targetBundleRef,String correlationId);record Receipt(UUID processingAttemptId,String downstreamReceiptRef,boolean durable){}}
