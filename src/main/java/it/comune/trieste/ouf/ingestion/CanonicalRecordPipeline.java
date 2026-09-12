@@ -44,6 +44,12 @@ public final class CanonicalRecordPipeline {
     }
   }
 
+  public Result reject(Command c,String reasonCode){
+    String code=reasonCode!=null&&reasonCode.matches("ING_[A-Z0-9_]{1,76}")?reasonCode:"ING_PROCESSING_REJECTED";String rawRef=sourceRef(c.record());
+    try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){}
+    UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId);
+  }
+
   private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),strings(c.get("mappingRefs")),mappings(c.get("propertyMappings")),required(c,"observationPolicy"));}
   private Map<String,Object> map(Map<String,Object> source,List<Mapping> mappings){Map<String,Object> out=new LinkedHashMap<>();for(Mapping m:mappings){if(!"IDENTITY".equals(m.transform()))throw failure("ING_TRANSFORM_UNSUPPORTED");if(!source.containsKey(m.sourceField()))throw failure("ING_MAPPING_SOURCE_FIELD_MISSING");if(out.put(m.targetPropertyIri(),source.get(m.sourceField()))!=null)throw failure("ING_MAPPING_TARGET_DUPLICATE");}return out;}
   private String observedAt(AdapterSpi.SourceRecord record,Config cfg,Instant acquired){if("ACQUISITION_TIME".equals(cfg.observationPolicy()))return acquired.toString();if("PROVENANCE_OBSERVED_AT".equals(cfg.observationPolicy())){Object v=record.provenance().get("observedAt");if(v==null)throw failure("ING_OBSERVED_AT_MISSING");try{return OffsetDateTime.parse(String.valueOf(v)).toInstant().toString();}catch(Exception e){throw failure("ING_OBSERVED_AT_INVALID");}}throw failure("ING_OBSERVATION_POLICY_UNSUPPORTED");}
