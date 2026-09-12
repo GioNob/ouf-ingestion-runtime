@@ -43,13 +43,13 @@
 
 - [x] Trusted Authorization principal/capability/tenant/decision context for quarantine operations; no actor headers.
 - [ ] Gateway binding/workload/secret references only; no raw URLs or credentials.
-- [x] Implemented quarantine APIs are internal/THS and explicitly not MCP tool-eligible.
+- [x] Technical replay/status APIs remain non-MCP; PET-listed safe issue/quarantine search, explain and inspect capabilities are explicitly MCP-tool-eligible and tenant-scoped.
 - [ ] Governed MCP-readable status/issue capability projection through MCP Server.
-- [x] Human-only protected quarantine replay request.
-- [ ] JSON structured logs configured; implemented handoff/quarantine paths use safe identifiers/codes, but wider run coverage remains open.
-- [ ] Append-only audit for run/pause/replay/quarantine/remediation and denied operations.
+- [x] Governed quarantine lifecycle `OPEN -> RETRY_READY -> REPROCESSING -> RESOLVED|OPEN`, plus human dismissal/supersession; transitions use optimistic locking, durable audit and operational logs.
+- [x] JSON structured logs configured; run, handoff, quarantine, replay and schema-surveillance paths emit safe identifiers/codes and persist protected operational events.
+- [x] Append-only audit for governed run control, quarantine remediation/reprocessing and protected-log access; denied authorization decisions remain owned and logged by Authorization.
 - [x] Implemented paths never log row payloads, tokens, secrets, receipts or source-object identifiers.
-- [ ] Metrics: handoff, quarantine and replay counters implemented; run/record/lag/circuit/queue gauges remain open.
+- [x] Metrics: handoff/quarantine/replay counters and active-run, due-schedule, outbox, quarantine, replay, circuit and watermark-age gauges.
 - [ ] Common THS backend integration for protected log/issue inspection and correlation.
 - [ ] Health/readiness, SLO alerts, runbook, backup/restore and retention/legal hold.
 

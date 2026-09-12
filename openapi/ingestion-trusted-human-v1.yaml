@@ -106,6 +106,15 @@ paths:
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}}
       responses: {'202': {description: Durable reprocessing queued}, '409': {description: Lifecycle conflict}}
+  /quarantine/{id}/retry:
+    post:
+      operationId: markIngestionQuarantineRetryReady
+      x-ouf-mcp-tool-eligible: true
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ouf.ingestion.quarantine.retry
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RetryRequest'}}}}
+      responses: {'204': {description: OPEN item marked RETRY_READY and audited}, '409': {description: Lifecycle conflict}}
   /quarantine/{id}/dismiss:
     post:
       operationId: dismissIngestionQuarantine
@@ -164,6 +173,11 @@ components:
       type: object
       required: [targetBundleRef]
       properties: {targetBundleRef: {type: string, minLength: 1}}
+      additionalProperties: false
+    RetryRequest:
+      type: object
+      required: [expectedVersion]
+      properties: {expectedVersion: {type: integer, minimum: 0}}
       additionalProperties: false
     QuarantineCloseRequest:
       type: object

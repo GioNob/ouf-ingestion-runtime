@@ -11,7 +11,7 @@ class TrustedHumanOpenApiTest {
     assertThat(yaml).contains("/logs/search:","/logs/aggregate:","ingestion.log.read","ingestion.log.aggregate");
     assertThat(yaml.split("x-ouf-mcp-tool-eligible: false",-1)).hasSize(7);
     assertThat(yaml).contains("/issues/schema-observations:","ouf.ingestion.issue.search","ouf.ingestion.issue.resolve","ouf.ingestion.onboarding-review.request","x-ouf-requires-human-user: true","x-ouf-mcp-tool-eligible: true");
-    assertThat(yaml).contains("/issues/{id}/explain:","ouf.ingestion.issue.explain","/quarantine/{id}/preview:","ouf.ingestion.quarantine.inspect","/quarantine/{id}/reprocess:","RETRY_READY","REPROCESSING","SUPERSEDED");
+    assertThat(yaml).contains("/issues/{id}/explain:","ouf.ingestion.issue.explain","/quarantine/{id}/preview:","ouf.ingestion.quarantine.inspect","/quarantine/{id}/retry:","ouf.ingestion.quarantine.retry","/quarantine/{id}/reprocess:","RETRY_READY","REPROCESSING","SUPERSEDED");
     String internal=Files.readString(Path.of("openapi/ingestion-internal-v1.yaml"));assertThat(internal).contains("/contracts/runs/{runId}:","ingestion.contract.read","x-ouf-mcp-tool-eligible: false");
   }
 }
