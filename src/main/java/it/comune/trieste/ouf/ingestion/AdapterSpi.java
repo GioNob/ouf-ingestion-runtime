@@ -10,4 +10,11 @@ public interface AdapterSpi {
   record Checkpoint(Map<String,Object> value){public Checkpoint{value=Map.copyOf(value);}}
   record SourceRecord(String sourceObjectId,long ordinal,Map<String,Object> payload,Map<String,Object> provenance){public SourceRecord{payload=Map.copyOf(payload);provenance=Map.copyOf(provenance);}}
   interface RecordCursor extends AutoCloseable {Optional<SourceRecord> next();Checkpoint checkpoint();@Override void close();}
+
+  enum ErrorClass { TRANSIENT_SOURCE, AUTH_ROUTE, CONFIGURATION, DATA, PROGRAMMING }
+  final class AdapterException extends RuntimeException {
+    private final String code; private final ErrorClass errorClass;
+    public AdapterException(String code,ErrorClass errorClass,String safeMessage){super(safeMessage);this.code=code;this.errorClass=errorClass;}
+    public String code(){return code;} public ErrorClass errorClass(){return errorClass;}
+  }
 }
