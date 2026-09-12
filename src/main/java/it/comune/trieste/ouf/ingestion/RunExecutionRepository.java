@@ -8,7 +8,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-public final class RunExecutionRepository {
+public class RunExecutionRepository {
   private final JdbcClient sql;private final ObjectMapper json;
   public RunExecutionRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
   @Transactional public Optional<Claim> claim(String worker,Duration lease){return sql.sql("with candidate as (select p.run_id,p.partition_key from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where r.state='RUNNING' and p.state='RUNNING' and (p.lease_until is null or p.lease_until<transaction_timestamp()) order by r.created_at,p.partition_key for update of p skip locked limit 1) update ouf_ingestion.ing_partition p set lease_owner=:w,lease_until=transaction_timestamp()+(:ms*interval '1 millisecond'),lease_generation=lease_generation+1 from candidate c where p.run_id=c.run_id and p.partition_key=c.partition_key returning p.run_id,p.partition_key,p.checkpoint_json::text,p.lease_generation")
