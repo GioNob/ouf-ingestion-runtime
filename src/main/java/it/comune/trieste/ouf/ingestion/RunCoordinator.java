@@ -3,9 +3,11 @@ package it.comune.trieste.ouf.ingestion;
 import java.time.Duration;
 import java.util.*;
 import org.slf4j.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Service;
 
 @Service
+@ConditionalOnBean({RuntimePorts.ActiveBundlePort.class,RuntimePorts.SemanticPort.class})
 public class RunCoordinator {
   private static final Logger LOG=LoggerFactory.getLogger(RunCoordinator.class);
   private final RunStateRepository state;private final RuntimePorts.ActiveBundlePort bundles;private final RuntimePorts.SemanticPort semantic;
