@@ -105,6 +105,17 @@
         "adapterProfileRef": {
           "type": "string",
           "minLength": 1
+        },
+        "authorityPolicyRef": {
+          "type": ["string", "null"]
+        },
+        "relationshipResolutionStrategyRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
         }
       },
       "additionalProperties": false,
