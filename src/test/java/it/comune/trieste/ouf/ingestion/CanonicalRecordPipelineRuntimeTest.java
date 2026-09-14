@@ -17,7 +17,7 @@ import org.springframework.test.context.*;
 
   @AfterEach void removeClaimableOutboxFromSharedDatabase(){for(UUID run:createdRuns)sql.sql("update ouf_ingestion.handoff_outbox set state='ACKED',acked_at=transaction_timestamp() where run_id=:r and state<>'ACKED'").param("r",run).update();createdRuns.clear();}
 
-  @Test void persistsThreeZonesAndStagesContractAlignedHandoff(){
+  @Test void persistsThreeZonesAndStagesContractAlignedHandoff() throws Exception {
     UUID run=run();RecordingLake lake=new RecordingLake();CanonicalRecordPipeline pipeline=pipeline(lake);
     var result=pipeline.process(command(run,Map.of("name","Town Hall"),List.of(mapping("name","https://example.test/name"))));
     assertThat(result.succeeded()).isTrue();assertThat(lake.zones).containsExactly(RuntimePorts.DataLakePort.Zone.RAW,RuntimePorts.DataLakePort.Zone.NORMALIZED,RuntimePorts.DataLakePort.Zone.CURATED);
@@ -28,6 +28,13 @@ import org.springframework.test.context.*;
     assertThat(string(row,"payload")).contains(result.lineageId().toString());
     assertThat(string(row,"evidence")).contains(result.processingAttemptId().toString(),"sha256:");
     assertThat(sql.sql("select count(*) from ouf_ingestion.ing_quarantine where run_id=:r").param("r",run).query(Long.class).single()).isZero();
+  }
+
+  @Test void sharedPairwiseFixtureSatisfiesFrozenHandoffContract() throws Exception {
+    Map<String,Object> fixture=json.readValue(Objects.requireNonNull(getClass().getResourceAsStream("/pairwise/ingestion-to-udp-relationship-handoff.json")),Map.class);
+    validator.validate("/contracts/rc3/handoff-payload-v1.json",fixture);
+    assertThat((Map<String,Object>)fixture.get("canonicalPayload")).containsEntry("streetRef","UNKNOWN");
+    assertThat(((Map<String,Object>)fixture.get("contractRefs")).get("relationshipResolutionStrategyRefs")).isEqualTo(List.of("relationship://located-on/1"));
   }
 
   @Test void mappingFailureCreatesFailedAttemptAndQuarantineWithoutCheckpointOrOutbox(){
