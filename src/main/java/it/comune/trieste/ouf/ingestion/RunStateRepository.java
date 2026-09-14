@@ -47,7 +47,7 @@ public class RunStateRepository {
 
   @Deprecated @Transactional public void recordHealth(String source,boolean success,String code){if(success)recordSuccess(source);else recordFailure(source,code,AdapterSpi.ErrorClass.CONFIGURATION,null);}
   public Map<String,Object> run(UUID run){return sql.sql("select run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,phase,failure_code,tenant_id,correlation_id,created_at,updated_at from ouf_ingestion.ing_run where run_id=:r").param("r",run).query().singleRow();}
-  private void lockSource(String source){sql.sql("select pg_advisory_xact_lock(hashtextextended(:s,0))").param("s",source).query(Long.class).single();}
+  private void lockSource(String source){sql.sql("select pg_advisory_xact_lock(hashtextextended(:s,0))").param("s",source).query().singleRow();}
   private void transition(UUID run,String from,String to,String code){int n=sql.sql("update ouf_ingestion.ing_run set state=:t,failure_code=:c,updated_at=transaction_timestamp() where run_id=:r and state=:f").param("t",to).param("c",code).param("r",run).param("f",from).update();if(n!=1)throw new IllegalStateException("ING_RUN_TRANSITION_INVALID");}
   private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("ING_BUNDLE_SNAPSHOT_INVALID",e);}}
   private static String phase(String acquisition){return switch(acquisition){case "INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
