@@ -1,0 +1,34 @@
+{
+  "handoffId": "pairwise-worksite-1",
+  "ingestionRunId": "pairwise-run-1",
+  "ingestionId": "pairwise-ingestion-1",
+  "sourceIdentity": {
+    "sourceId": "worksites",
+    "typeCode": "WORKSITE",
+    "sourceObjectId": "work-1",
+    "observedAt": "2026-09-12T00:00:00Z"
+  },
+  "operation": "UPSERT",
+  "canonicalPayload": {
+    "identity": "W1",
+    "code": "W1",
+    "streetRef": "UNKNOWN"
+  },
+  "rawObjectRef": "raw://pairwise-worksite-1",
+  "contractRefs": {
+    "sourceSchemaRef": "schema://worksites/1",
+    "bundleRef": "bundle://worksites/1",
+    "semanticPublicationSetRef": "semantic://urban/1",
+    "adapterProfileRef": "adapter://managed/1",
+    "mappingRefs": ["mapping://worksites/1"],
+    "relationshipResolutionStrategyRefs": ["relationship://located-on/1"]
+  },
+  "lineageId": "pairwise-lineage-1",
+  "contentHash": "sha256:pairwise-worksite-1",
+  "acquiredAt": "2026-09-12T00:00:00Z",
+  "changeRepresentation": {
+    "mode": "FULL_SNAPSHOT",
+    "canonicalContentHash": "sha256:pairwise-worksite-1"
+  },
+  "correlationId": "pairwise-correlation-1"
+}
