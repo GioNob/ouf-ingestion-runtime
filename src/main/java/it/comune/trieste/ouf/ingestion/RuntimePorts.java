@@ -1,4 +1,5 @@
 package it.comune.trieste.ouf.ingestion;
+import java.time.Duration;
 import java.util.*;
 public final class RuntimePorts {private RuntimePorts(){}
   public interface ActiveBundlePort {ExecutionBundle loadAndVerify(String sourceId);}
@@ -6,9 +7,10 @@ public final class RuntimePorts {private RuntimePorts(){}
   public interface OnboardingReviewPort {Receipt request(UUID issueId,String sourceId,String evidenceRef,String correlationId,String idempotencyKey);record Receipt(String reviewRef,boolean durable){} }
   public interface GatewaySourcePort {byte[] fetch(String governedBindingRef,Map<String,Object> request,String correlationId);}
   public static final class GatewayFailure extends RuntimeException {
-    private final String safeCode;private final AdapterSpi.ErrorClass errorClass;
-    public GatewayFailure(String safeCode,AdapterSpi.ErrorClass errorClass){super(safeCode);this.safeCode=safeCode;this.errorClass=errorClass;}
-    public String safeCode(){return safeCode;}public AdapterSpi.ErrorClass errorClass(){return errorClass;}
+    private final String safeCode;private final AdapterSpi.ErrorClass errorClass;private final Duration retryAfter;
+    public GatewayFailure(String safeCode,AdapterSpi.ErrorClass errorClass){this(safeCode,errorClass,null);}
+    public GatewayFailure(String safeCode,AdapterSpi.ErrorClass errorClass,Duration retryAfter){super(safeCode);this.safeCode=safeCode;this.errorClass=errorClass;this.retryAfter=retryAfter;if(retryAfter!=null&&(retryAfter.isNegative()||retryAfter.isZero()))throw new IllegalArgumentException("ING_RETRY_AFTER_INVALID");}
+    public String safeCode(){return safeCode;}public AdapterSpi.ErrorClass errorClass(){return errorClass;}public Optional<Duration> retryAfter(){return Optional.ofNullable(retryAfter);}
   }
   public interface ManagedObjectPort {byte[] read(String objectRef,long expectedSize,String expectedHash);}
   public interface DataLakePort {
