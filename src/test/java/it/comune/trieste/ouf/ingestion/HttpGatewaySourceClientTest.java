@@ -52,6 +52,16 @@ class HttpGatewaySourceClientTest {
     response.set(new Response(200,"ok".getBytes(StandardCharsets.UTF_8),Map.of(),400));var failure=catchThrowableOfType(()->fetch(client(40)),RuntimePorts.GatewayFailure.class);assertThat(failure.safeCode()).isEqualTo("ING_GATEWAY_UNAVAILABLE");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
   }
 
+  @Test void refusedConnectionIsTransient() throws Exception {
+    int port;try(java.net.ServerSocket socket=new java.net.ServerSocket(0,1,InetAddress.getLoopbackAddress())){port=socket.getLocalPort();}
+    URI unavailable=URI.create("http://127.0.0.1:"+port+"/fetch");var failure=catchThrowableOfType(()->fetch(client(unavailable,300,1_000_000)),RuntimePorts.GatewayFailure.class);
+    assertThat(failure.safeCode()).isEqualTo("ING_GATEWAY_UNAVAILABLE");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+  }
+
+  @Test void oversizedSuccessfulResponseIsDeterministicDataFailure(){
+    respond(200,"123456");var failure=catchThrowableOfType(()->fetch(client(endpoint(),1000,5)),RuntimePorts.GatewayFailure.class);assertThat(failure.safeCode()).isEqualTo("ING_GATEWAY_RESPONSE_TOO_LARGE");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.DATA);
+  }
+
   @Test void invalidSuccessfulPayloadIsDeterministicDataFailure(){
     respond(200,"not-json");var cursor=new GatewayJsonAdapter(client(1000),json).open(bundle(),null);AdapterSpi.AdapterException failure=catchThrowableOfType(cursor::next,AdapterSpi.AdapterException.class);assertThat(failure.code()).isEqualTo("ING_JSON_INVALID");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.DATA);
   }
@@ -63,7 +73,9 @@ class HttpGatewaySourceClientTest {
   private void assertClass(int status,AdapterSpi.ErrorClass type,String code){assertFailure(type,code);}
   private void assertFailure(AdapterSpi.ErrorClass type,String code){var failure=catchThrowableOfType(()->fetch(client(1000)),RuntimePorts.GatewayFailure.class);assertThat(failure.safeCode()).isEqualTo(code);assertThat(failure.errorClass()).isEqualTo(type);}
   private void fetch(HttpGatewaySourceClient client){client.fetch("gateway://rest/objects",Map.of("pageSize",10),"corr-1");}
-  private HttpGatewaySourceClient client(long timeoutMs){return new HttpGatewaySourceClient(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build(),URI.create("http://"+server.getAddress().getHostString()+":"+server.getAddress().getPort()+"/fetch"),json,Duration.ofMillis(timeoutMs),1_000_000,Clock.fixed(Instant.parse("2026-09-14T00:00:00Z"),ZoneOffset.UTC));}
+  private HttpGatewaySourceClient client(long timeoutMs){return client(endpoint(),timeoutMs,1_000_000);}
+  private URI endpoint(){return URI.create("http://"+server.getAddress().getHostString()+":"+server.getAddress().getPort()+"/fetch");}
+  private HttpGatewaySourceClient client(URI endpoint,long timeoutMs,int maxBytes){return new HttpGatewaySourceClient(HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build(),endpoint,json,Duration.ofMillis(timeoutMs),maxBytes,Clock.fixed(Instant.parse("2026-09-14T00:00:00Z"),ZoneOffset.UTC));}
   private void respond(int status,String body){respond(status,body,Map.of());}
   private void respond(int status,String body,Map<String,String> headers){response.set(new Response(status,body.getBytes(StandardCharsets.UTF_8),headers,0));}
   private static ExecutionBundle bundle(){return new ExecutionBundle("b","1","h","s","REST_JSON","gateway://rest/objects",Map.of("identityFields",List.of("id"),"typeCode","OBJECT","pageSize",10));}
