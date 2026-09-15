@@ -21,13 +21,16 @@ public class DurablePipelineRepository {
 
   @Transactional
   public UUID stage(StageCommand c,UUID attempt,UUID lineage,UUID handoff){
+    String encodedPayload=encode(c.payload);sql.sql("select pg_advisory_xact_lock(hashtextextended(:i,0))").param("i",c.idempotencyKey).query().singleRow();
+    List<Map<String,Object>> existing=sql.sql("select handoff_id,payload_json=cast(:p as jsonb) payload_matches from ouf_ingestion.handoff_outbox where idempotency_key=:i").param("p",encodedPayload).param("i",c.idempotencyKey).query().listOfRows();
+    if(!existing.isEmpty()){Map<String,Object> row=existing.getFirst();if(!Boolean.TRUE.equals(row.get("payload_matches")))throw new IllegalStateException("ING_IDEMPOTENCY_CONFLICT");return (UUID)row.get("handoff_id");}
     UUID checkpoint=UUID.randomUUID();
     sql.sql("insert into ouf_ingestion.processing_attempt(attempt_id,run_id,source_object_id,attempt_no,adapter_id,bundle_version,state) values(:a,:r,:o,:n,:ad,:bv,'SUCCEEDED')")
       .param("a",attempt).param("r",c.runId).param("o",c.sourceObjectId).param("n",c.attemptNo).param("ad",c.adapterId).param("bv",c.bundleVersion).update();
     sql.sql("insert into ouf_ingestion.ing_lineage(lineage_id,run_id,attempt_id,source_object_id,bundle_ref,adapter_ref,evidence_json) values(:l,:r,:a,:o,:b,:ad,cast(:e as jsonb))")
       .param("l",lineage).param("r",c.runId).param("a",attempt).param("o",c.sourceObjectId).param("b",c.bundleRef).param("ad",c.adapterId).param("e",encode(c.evidence)).update();
     sql.sql("insert into ouf_ingestion.handoff_outbox(handoff_id,run_id,lineage_id,idempotency_key,payload_json,partition_key,sequence_no,candidate_watermark_json) values(:h,:r,:l,:i,cast(:p as jsonb),:pk,:s,cast(:w as jsonb))")
-      .param("h",handoff).param("r",c.runId).param("l",lineage).param("i",c.idempotencyKey).param("p",encode(c.payload)).param("pk",c.partitionKey).param("s",c.sequenceNo).param("w",encode(c.candidateWatermark)).update();
+      .param("h",handoff).param("r",c.runId).param("l",lineage).param("i",c.idempotencyKey).param("p",encodedPayload).param("pk",c.partitionKey).param("s",c.sequenceNo).param("w",encode(c.candidateWatermark)).update();
     sql.sql("insert into ouf_ingestion.checkpoint_history(checkpoint_id,run_id,partition_key,sequence_no,checkpoint_json) values(:c,:r,:pk,:s,cast(:v as jsonb))")
       .param("c",checkpoint).param("r",c.runId).param("pk",c.partitionKey).param("s",c.sequenceNo).param("v",encode(c.restartCheckpoint)).update();
     sql.sql("update ouf_ingestion.ing_partition set checkpoint_json=cast(:v as jsonb),lock_version=lock_version+1 where run_id=:r and partition_key=:pk")
@@ -46,7 +49,7 @@ public class DurablePipelineRepository {
   /** Claim transaction ends before the remote call. SKIP LOCKED supports competing workers. */
   @Transactional
   public Optional<ClaimedHandoff> claim(String worker,Duration lease){
-    return sql.sql("with candidate as (select handoff_id from ouf_ingestion.handoff_outbox where state in ('READY','FAILED_RETRYABLE') and next_attempt_at<=transaction_timestamp() and (lease_until is null or lease_until<transaction_timestamp()) order by next_attempt_at,created_at for update skip locked limit 1) update ouf_ingestion.handoff_outbox h set state='DELIVERING',lease_owner=:w,lease_until=transaction_timestamp()+(:ms * interval '1 millisecond'),attempts=attempts+1 from candidate c where h.handoff_id=c.handoff_id returning h.handoff_id,h.payload_json::text,h.idempotency_key")
+    return sql.sql("with candidate as (select h.handoff_id from ouf_ingestion.handoff_outbox h where ((h.state in ('READY','FAILED_RETRYABLE') and h.next_attempt_at<=transaction_timestamp()) or (h.state='DELIVERING' and h.lease_until<transaction_timestamp())) and not exists(select 1 from ouf_ingestion.handoff_outbox prior where prior.run_id=h.run_id and prior.partition_key=h.partition_key and prior.sequence_no<h.sequence_no and prior.state<>'ACKED') order by h.next_attempt_at,h.created_at for update skip locked limit 1) update ouf_ingestion.handoff_outbox h set state='DELIVERING',lease_owner=:w,lease_until=transaction_timestamp()+(:ms * interval '1 millisecond'),attempts=attempts+1 from candidate c where h.handoff_id=c.handoff_id returning h.handoff_id,h.payload_json::text,h.idempotency_key")
       .param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new ClaimedHandoff(rs.getObject(1,UUID.class),decode(rs.getString(2)),rs.getString(3))).optional();
   }
 

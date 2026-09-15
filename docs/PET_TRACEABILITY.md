@@ -6,23 +6,23 @@
 
 - [x] Consume and pin exactly one ACTIVE PublishedConfigurationBundle per run.
 - [x] Preflight contract/semantic/binding compatibility before every scheduled run and governed resume.
-- [ ] FULL_SNAPSHOT → CATCH_UP → DELTA state machine.
+- [x] FULL_SNAPSHOT → CATCH_UP → DELTA state machine with invalid-transition rejection.
 - [x] Separate restartable checkpoint from committed watermark.
 - [x] Advance watermark only after durable downstream ACK for all required handoffs.
 - [x] Transactional outbox with short claim/completion transactions and leased DELIVERING state.
-- [ ] Idempotency/deduplication ledger and ordering per source object/partition.
+- [x] Idempotency/deduplication ledger, conflict detection, strict partition delivery ordering and expired-lease crash reclaim.
 - [x] PostgreSQL job scheduler, tenant fairness, global/per-source admission, workload priority, pressure hysteresis and multi-worker `SKIP LOCKED` leases.
 - [x] Persisted finite-window retry budgets, exponential backoff, `Retry-After`, selective circuit breaker and source HEALTHY/DEGRADED/PAUSED/recovery probe.
 - [x] Quarantine and replay execution with immutable attempt history, parent evidence, idempotency and explicit REPRODUCE/REPROCESS_CURRENT/REPROCESS_TARGET modes.
 - [x] Cross-module quarantine handoff: Onboarding intake quarantine remains distinct from runtime record/batch quarantine.
-- [ ] Schema observation/drift isolation; never guess mappings.
+- [x] Schema observation/drift isolation; incompatible shapes pause only their run and never guess mappings.
 - [x] Historical bundle/adapter/semantic references, dependency-based deletion guard and append-only technical legal-hold decisions.
 
 ## Adapter framework
 
 - [x] Common connector and adapter SPI with capability declaration and compatibility window.
-- [ ] Gateway-only REST/JSON adapter.
-- [ ] Gateway-only OGC WFS adapter with paging and CRS/axis-order evidence.
+- [x] Gateway-only REST/JSON adapter with governed paging and fault classification.
+- [x] Gateway-only OGC WFS adapter with paging and CRS/axis-order evidence.
 - [x] INTERNAL_MANAGED CSV adapter: one row = one source object.
 - [x] INTERNAL_MANAGED XLSX adapter: explicit sheet policy; formulas never executed.
 - [x] Bounded response/file, page and record sizes; remote bootstrap is consumed page-by-page without whole-bootstrap accumulation.
@@ -31,7 +31,7 @@
 ## Processing and handoff
 
 - [x] Canonical Data Envelope rc3 validation.
-- [ ] Technical normalization, configured field/vocabulary mapping and runtime validation.
+- [x] Technical normalization, configured field mapping and frozen-contract runtime validation; unsupported transforms fail closed.
 - [x] SourceObjectIdentityPolicy behavior with duplicate/reorder tests for managed files.
 - [x] Candidate canonical object and unresolved-relationship handoff only; UDP owns resolution.
 - [x] HandoffPayload rc3 and LineageRecord rc3 validation.
@@ -42,7 +42,7 @@
 ## Security and operations
 
 - [x] Trusted Authorization principal/capability/tenant/decision context for quarantine operations; no actor headers.
-- [ ] Gateway binding/workload/secret references only; no raw URLs or credentials.
+- [x] Gateway binding/workload/secret references only; raw URLs and credential-like configuration are rejected before I/O.
 - [x] Technical replay/status APIs remain non-MCP; PET-listed safe issue/quarantine search, explain and inspect capabilities are explicitly MCP-tool-eligible and tenant-scoped.
 - [ ] Governed MCP-readable status/issue capability projection through MCP Server.
 - [x] Governed quarantine lifecycle `OPEN -> RETRY_READY -> REPROCESSING -> RESOLVED|OPEN`, plus human dismissal/supersession; transitions use optimistic locking, durable audit and operational logs.
@@ -58,7 +58,7 @@
 
 - [x] Frozen contract checksums and JSON Schema positive/negative fixtures, including classpath resolution of the common DataAccessLabel contract.
 - [ ] PostgreSQL 17 migrations, upgrade, concurrency, crash/restart and rollback tests.
-- [ ] Adapter contract suite and Gateway/UDP fault fixtures.
-- [ ] Managed CSV/XLSX and REST/WFS vertical slices.
+- [x] Adapter contract suite and Gateway/UDP ACK/fault fixtures.
+- [x] Managed CSV/XLSX adapter slices and REST/WFS end-to-end slices through durable UDP ACK and watermark.
 - [ ] OpenAPI 3.1 structural and implementation-parity tests.
 - [ ] Container non-root, SBOM/dependency scan and evidence package.
