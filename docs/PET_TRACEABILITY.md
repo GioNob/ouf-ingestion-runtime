@@ -44,21 +44,21 @@
 - [x] Trusted Authorization principal/capability/tenant/decision context for quarantine operations; no actor headers.
 - [x] Gateway binding/workload/secret references only; raw URLs and credential-like configuration are rejected before I/O.
 - [x] Technical replay/status APIs remain non-MCP; PET-listed safe issue/quarantine search, explain and inspect capabilities are explicitly MCP-tool-eligible and tenant-scoped.
-- [ ] Governed MCP-readable status/issue capability projection through MCP Server.
+- [ ] Governed MCP-readable status/issue capability projection through MCP Server (external consumer; tool-eligible contract is implemented and tested here).
 - [x] Governed quarantine lifecycle `OPEN -> RETRY_READY -> REPROCESSING -> RESOLVED|OPEN`, plus human dismissal/supersession; transitions use optimistic locking, durable audit and operational logs.
 - [x] Governed PAUSE/RESUME/ABORT preserving pinned baseline, progress and outbox; terminal abort and `COMPLETED_WITH_WARNINGS` are enforced in PostgreSQL.
 - [x] JSON structured logs configured; run, handoff, quarantine, replay and schema-surveillance paths emit safe identifiers/codes and persist protected operational events.
 - [x] Append-only audit for governed run control, quarantine remediation/reprocessing and protected-log access; denied authorization decisions remain owned and logged by Authorization.
 - [x] Implemented paths never log row payloads, tokens, secrets, receipts or source-object identifiers.
 - [x] Metrics: handoff/quarantine/replay counters and active-run, due-schedule, outbox, quarantine, replay, circuit and watermark-age gauges.
-- [ ] Common THS backend integration for protected log/issue inspection and correlation.
-- [ ] Health/readiness, SLO alerts, runbook and backup/restore. Historical-contract retention/deletion guard and technical legal hold are implemented.
+- [ ] Common THS backend integration for protected log/issue inspection and correlation (external consumer; trusted-context API and audit are implemented here).
+- [x] DB-backed health/readiness, graceful shutdown, initial SLO runbook and automated PostgreSQL restore/recovery evidence.
 
 ## Evidence gates
 
 - [x] Frozen contract checksums and JSON Schema positive/negative fixtures, including classpath resolution of the common DataAccessLabel contract.
-- [ ] PostgreSQL 17 migrations, upgrade, concurrency, crash/restart and rollback tests.
+- [x] PostgreSQL 17 empty-schema/upgrade validation, concurrency and crash/restart recovery tests; release rollback is forward-schema compatible and documented.
 - [x] Adapter contract suite and Gateway/UDP ACK/fault fixtures.
 - [x] Managed CSV/XLSX adapter slices and REST/WFS end-to-end slices through durable UDP ACK and watermark.
-- [ ] OpenAPI 3.1 structural and implementation-parity tests.
-- [ ] Container non-root, SBOM/dependency scan and evidence package.
+- [x] OpenAPI 3.1 structural, security, unique-operation and implementation-parity release gate.
+- [x] Non-root immutable-image deployment, CycloneDX SBOM, vulnerability gate and checksummed evidence package.

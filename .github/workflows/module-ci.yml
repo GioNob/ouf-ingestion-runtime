@@ -4,6 +4,7 @@ permissions: {contents: read}
 jobs:
   java21-postgresql17:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine
@@ -21,9 +22,63 @@ jobs:
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify and package
         run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+      - name: Validate OpenAPI release contract
+        run: mvn -B -ntp -Dtest=OpenApiReleaseGateTest test
       - name: Build non-root container
         run: docker build -t ouf-ingestion:${{ github.sha }} . && test "$(docker image inspect ouf-ingestion:${{ github.sha }} --format '{{.Config.User}}')" = "10002:10002"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with: {name: 'ingestion-evidence-${{ github.run_id }}', path: 'target/surefire-reports/', retention-days: 30}
+  disaster-recovery-drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Package recovery subject
+        run: mvn -B -ntp -DskipTests package
+      - name: Execute PostgreSQL restore drill
+        run: bash scripts/ci/postgres-restore-drill.sh
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'ingestion-dr-evidence-${{ github.run_id }}', path: 'target/dr-evidence/', retention-days: 30}
+  supply-chain-deployment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Package application and CycloneDX SBOM
+        run: mvn -B -ntp -DskipTests package
+      - name: Validate SBOM
+        run: test -s target/bom.json && python3 -c "import json; b=json.load(open('target/bom.json')); assert b['bomFormat']=='CycloneDX' and b.get('components')"
+      - name: Build deployable image
+        run: docker build -t ouf-ingestion:${{ github.sha }} .
+      - name: Scan image and enforce vulnerability policy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with: {image-ref: 'ouf-ingestion:${{ github.sha }}', format: json, output: target/trivy-image.json, severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1'}
+      - name: Validate deployment chart
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm:3.19.0 lint deploy/helm/ouf-ingestion
+          docker run --rm -v "$PWD:/work" -w /work alpine/helm:3.19.0 template ingestion deploy/helm/ouf-ingestion --set image.repository=registry.example.invalid/ouf-ingestion --set image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set runtime.existingSecret=ingestion-runtime --set runtime.existingConfigMap=ingestion-runtime >target/rendered-deployment.yaml
+          python3 scripts/ci/verify-deployment.py target/rendered-deployment.yaml
+      - name: Freeze release evidence
+        if: always()
+        run: |
+          mkdir -p target/release-evidence/openapi target/release-evidence/schemas
+          cp target/bom.json target/release-evidence/cyclonedx-sbom.json 2>/dev/null || true
+          cp target/trivy-image.json target/release-evidence/trivy-image.json 2>/dev/null || true
+          cp target/rendered-deployment.yaml target/release-evidence/rendered-deployment.yaml 2>/dev/null || true
+          cp openapi/*.yaml target/release-evidence/openapi/
+          cp -r contracts/* target/release-evidence/schemas/
+          git rev-parse HEAD >target/release-evidence/COMMIT_SHA
+          find src/main/resources/db/migration -type f -name 'V*__*.sql' -print0 | sort -z | xargs -0 sha256sum >target/release-evidence/DB_MIGRATION_SHA256SUMS
+          (cd target/release-evidence && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS)
+      - name: Upload supply-chain and release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'ingestion-release-evidence-${{ github.run_id }}', path: 'target/release-evidence/', retention-days: 30}

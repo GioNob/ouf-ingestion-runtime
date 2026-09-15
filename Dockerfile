@@ -9,4 +9,5 @@ RUN groupadd -g 10002 ouf && useradd -r -u 10002 -g ouf ouf
 WORKDIR /app
 COPY --from=build /build/target/ingestion-runtime-*.jar app.jar
 USER 10002:10002
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["java","-jar","/app/app.jar"]

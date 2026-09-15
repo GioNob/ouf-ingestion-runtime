@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: {{ include "ouf-ingestion.name" . }}}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector: {matchLabels: {app.kubernetes.io/name: {{ include "ouf-ingestion.name" . }}}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: {{ include "ouf-ingestion.name" . }}}}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.shutdown.terminationGracePeriodSeconds }}
+      securityContext: {runAsNonRoot: true, runAsUser: 10002, runAsGroup: 10002, fsGroup: 10002, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: app
+          image: "{{ required "image.repository is required" .Values.image.repository }}@{{ required "image.digest is required" .Values.image.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}, readOnlyRootFilesystem: true}
+          ports: [{name: http, containerPort: 8080, protocol: TCP}]
+          envFrom:
+            - secretRef: {name: {{ required "runtime.existingSecret is required" .Values.runtime.existingSecret }}}
+            - configMapRef: {name: {{ required "runtime.existingConfigMap is required" .Values.runtime.existingConfigMap }}}
+          lifecycle: {preStop: {exec: {command: ["sh", "-c", "sleep {{ .Values.shutdown.preStopSeconds }}"]}}}
+          startupProbe: {httpGet: {path: /actuator/health/liveness, port: http}, failureThreshold: 30, periodSeconds: 2}
+          livenessProbe: {httpGet: {path: /actuator/health/liveness, port: http}, periodSeconds: 10, timeoutSeconds: 2}
+          readinessProbe: {httpGet: {path: /actuator/health/readiness, port: http}, periodSeconds: 5, timeoutSeconds: 2}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]
