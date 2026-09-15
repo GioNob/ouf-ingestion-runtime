@@ -39,15 +39,15 @@ public final class CanonicalRecordPipeline {
       return new Result(attempt,lineage,handoff,null);
     }catch(RuntimeException failure){
       String code=safeCode(failure);UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);
-      UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"contract-or-mapping:"+code,c.correlationId());
-      return new Result(failed,null,null,quarantineId);
+      boolean blocking=!nonBlocking(c.bundle(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"contract-or-mapping:"+code,c.correlationId(),blocking);
+      return new Result(failed,null,null,quarantineId,blocking);
     }
   }
 
   public Result reject(Command c,String reasonCode){
     String code=reasonCode!=null&&reasonCode.matches("ING_[A-Z0-9_]{1,76}")?reasonCode:"ING_PROCESSING_REJECTED";String rawRef=sourceRef(c.record());
     try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){}
-    UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId);
+    UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId,true);
   }
 
   private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),optional(c,"authorityPolicyRef"),strings(c.get("mappingRefs")),strings(c.get("relationshipResolutionStrategyRefs")),labels(c.get("dataAccessLabels")),mappings(c.get("propertyMappings")),required(c,"observationPolicy"),changeProfile(c.get("changeRepresentationProfile")));}
@@ -62,6 +62,7 @@ public final class CanonicalRecordPipeline {
   private static String hash(byte[] value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));}catch(Exception e){throw new IllegalStateException("ING_HASH_UNAVAILABLE",e);}}
   private static String idempotency(Command c,String suffix){return c.runId()+":"+c.partitionKey()+":"+c.sequenceNo()+":"+suffix;}
   private static String bundleRef(ExecutionBundle b){return b.bundleId()+":"+b.bundleVersion()+":"+b.checksum();}
+  private static boolean nonBlocking(ExecutionBundle bundle,String code){Object value=bundle.configuration().get("nonBlockingQuarantineReasonCodes");return value instanceof Collection<?> codes&&codes.stream().map(String::valueOf).anyMatch(code::equals);}
   private static String sourceRef(AdapterSpi.SourceRecord r){Object ref=r.provenance().get("managedObjectRef");return ref==null?"source-object:"+r.sourceObjectId():String.valueOf(ref);}
   private static RecordMetadata metadata(AdapterSpi.SourceRecord r){Map<String,Object> p=r.provenance();Operation operation=parseOperation(p.get("operation"));String validFrom=instant(p,"validFrom"),validTo=instant(p,"validTo");if(validFrom!=null&&validTo!=null&&Instant.parse(validTo).isBefore(Instant.parse(validFrom)))throw failure("ING_VALID_TIME_INVALID");return new RecordMetadata(operation,optional(p,"sourceRevision"),validFrom,validTo,optional(p,"baseRevisionRef"),optional(p,"baseContentHash"),scalar(p,"eventSequence"),optional(p,"geometryHash"),optional(p,"relationshipsHash"),optional(p,"contractEvidenceHash"));}
   private static Operation parseOperation(Object value){if(value==null)return Operation.UPSERT;try{return Operation.valueOf(String.valueOf(value));}catch(Exception e){throw failure("ING_OPERATION_UNSUPPORTED");}}
@@ -87,5 +88,5 @@ public final class CanonicalRecordPipeline {
   private record Config(String sourceSchemaRef,String sourceSchemaId,String sourceSchemaVersion,String typeCode,String semanticPublicationSetRef,String adapterProfileRef,String authorityPolicyRef,List<String> mappingRefs,List<String> relationshipResolutionStrategyRefs,List<Map<String,Object>> dataAccessLabels,List<Mapping> mappings,String observationPolicy,ChangeProfile changeProfile){}
   private record Mapping(String sourceField,String targetPropertyIri,String transform){}
   public record Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){public Command{Objects.requireNonNull(runId);Objects.requireNonNull(bundle);Objects.requireNonNull(record);restartCheckpoint=Map.copyOf(restartCheckpoint);candidateWatermark=Map.copyOf(candidateWatermark);}}
-  public record Result(UUID processingAttemptId,UUID lineageId,UUID handoffId,UUID quarantineId){public boolean succeeded(){return handoffId!=null;}}
+  public record Result(UUID processingAttemptId,UUID lineageId,UUID handoffId,UUID quarantineId,boolean blockingFailure){public Result(UUID processingAttemptId,UUID lineageId,UUID handoffId,UUID quarantineId){this(processingAttemptId,lineageId,handoffId,quarantineId,false);}public boolean succeeded(){return handoffId!=null;}}
 }

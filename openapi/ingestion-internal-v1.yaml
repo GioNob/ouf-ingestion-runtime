@@ -18,6 +18,42 @@ paths:
         - {$ref: '#/components/parameters/RunId'}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200}}
       responses: {'200': {description: Bounded record lineage and frozen contract references}}
+  /contracts/deletion-check:
+    post:
+      operationId: checkHistoricalContractDeletion
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.contract.delete-check
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ContractRequest'}}}}
+      responses: {'200': {description: Exact dependency count and legal-hold decision}}
+  /contracts/assert-removable:
+    post:
+      operationId: assertHistoricalContractRemovable
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.contract.delete
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ContractRequest'}}}}
+      responses: {'200': {description: No retained dependency exists}, '409': {description: Referenced or legally held contract}}
+  /contracts/legal-hold:
+    post:
+      operationId: changeHistoricalContractLegalHold
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ingestion.contract.legal-hold
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/HoldRequest'}}}}
+      responses: {'200': {description: Append-only legal-hold decision recorded and audited}}
 components:
   parameters:
     RunId: {in: path, name: runId, required: true, schema: {type: string, format: uuid}}
+  schemas:
+    ContractRequest:
+      type: object
+      required: [contractRef]
+      properties: {contractRef: {type: string, minLength: 1, maxLength: 500}}
+      additionalProperties: false
+    HoldRequest:
+      type: object
+      required: [contractRef, action, reason]
+      properties:
+        contractRef: {type: string, minLength: 1, maxLength: 500}
+        action: {type: string, enum: [APPLY, RELEASE]}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+      additionalProperties: false

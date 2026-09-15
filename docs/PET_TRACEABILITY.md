@@ -4,8 +4,8 @@
 
 ## Runtime and persistence
 
-- [ ] Consume and pin exactly one ACTIVE PublishedConfigurationBundle per run.
-- [ ] Preflight contract/semantic/binding compatibility before every scheduled run.
+- [x] Consume and pin exactly one ACTIVE PublishedConfigurationBundle per run.
+- [x] Preflight contract/semantic/binding compatibility before every scheduled run and governed resume.
 - [ ] FULL_SNAPSHOT → CATCH_UP → DELTA state machine.
 - [x] Separate restartable checkpoint from committed watermark.
 - [x] Advance watermark only after durable downstream ACK for all required handoffs.
@@ -13,10 +13,10 @@
 - [ ] Idempotency/deduplication ledger and ordering per source object/partition.
 - [ ] PostgreSQL job scheduler, fairness, admission control and multi-worker `SKIP LOCKED` leases.
 - [ ] Retry budgets, exponential backoff, circuit breaker and source HEALTHY/DEGRADED/PAUSED.
-- [x] Quarantine, replay request and immutable processing-attempt history. Replay execution worker remains open.
+- [x] Quarantine and replay execution with immutable attempt history, parent evidence, idempotency and explicit REPRODUCE/REPROCESS_CURRENT/REPROCESS_TARGET modes.
 - [x] Cross-module quarantine handoff: Onboarding intake quarantine remains distinct from runtime record/batch quarantine.
 - [ ] Schema observation/drift isolation; never guess mappings.
-- [ ] Historical bundle/adapter/semantic contract retention.
+- [x] Historical bundle/adapter/semantic references, dependency-based deletion guard and append-only technical legal-hold decisions.
 
 ## Adapter framework
 
@@ -46,12 +46,13 @@
 - [x] Technical replay/status APIs remain non-MCP; PET-listed safe issue/quarantine search, explain and inspect capabilities are explicitly MCP-tool-eligible and tenant-scoped.
 - [ ] Governed MCP-readable status/issue capability projection through MCP Server.
 - [x] Governed quarantine lifecycle `OPEN -> RETRY_READY -> REPROCESSING -> RESOLVED|OPEN`, plus human dismissal/supersession; transitions use optimistic locking, durable audit and operational logs.
+- [x] Governed PAUSE/RESUME/ABORT preserving pinned baseline, progress and outbox; terminal abort and `COMPLETED_WITH_WARNINGS` are enforced in PostgreSQL.
 - [x] JSON structured logs configured; run, handoff, quarantine, replay and schema-surveillance paths emit safe identifiers/codes and persist protected operational events.
 - [x] Append-only audit for governed run control, quarantine remediation/reprocessing and protected-log access; denied authorization decisions remain owned and logged by Authorization.
 - [x] Implemented paths never log row payloads, tokens, secrets, receipts or source-object identifiers.
 - [x] Metrics: handoff/quarantine/replay counters and active-run, due-schedule, outbox, quarantine, replay, circuit and watermark-age gauges.
 - [ ] Common THS backend integration for protected log/issue inspection and correlation.
-- [ ] Health/readiness, SLO alerts, runbook, backup/restore and retention/legal hold.
+- [ ] Health/readiness, SLO alerts, runbook and backup/restore. Historical-contract retention/deletion guard and technical legal hold are implemented.
 
 ## Evidence gates
 
