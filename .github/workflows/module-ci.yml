@@ -55,7 +55,7 @@ jobs:
       - name: Package application and CycloneDX SBOM
         run: mvn -B -ntp -DskipTests package
       - name: Validate SBOM
-        run: test -s target/bom.json && python3 -c "import json; b=json.load(open('target/bom.json')); assert b['bomFormat']=='CycloneDX' and b.get('components')"
+        run: test -s target/classes/META-INF/sbom/application.cdx.json && python3 -c "import json; b=json.load(open('target/classes/META-INF/sbom/application.cdx.json')); assert b['bomFormat']=='CycloneDX' and b.get('components')"
       - name: Build deployable image
         run: docker build -t ouf-ingestion:${{ github.sha }} .
       - name: Scan image and enforce vulnerability policy
@@ -70,7 +70,7 @@ jobs:
         if: always()
         run: |
           mkdir -p target/release-evidence/openapi target/release-evidence/schemas
-          cp target/bom.json target/release-evidence/cyclonedx-sbom.json 2>/dev/null || true
+          cp target/classes/META-INF/sbom/application.cdx.json target/release-evidence/cyclonedx-sbom.json 2>/dev/null || true
           cp target/trivy-image.json target/release-evidence/trivy-image.json 2>/dev/null || true
           cp target/rendered-deployment.yaml target/release-evidence/rendered-deployment.yaml 2>/dev/null || true
           cp openapi/*.yaml target/release-evidence/openapi/
