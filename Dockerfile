@@ -3,7 +3,7 @@ WORKDIR /build
 COPY pom.xml .
 COPY src src
 COPY contracts contracts
-RUN mvn -B -ntp -DskipTests packae
+RUN mvn -B -ntp -DskipTests package
 FROM gcr.io/distroless/java21-debian12:nonroot
 WORKDIR /app
 COPY --from=build /build/target/ingestion-runtime-*.jar app.jar
