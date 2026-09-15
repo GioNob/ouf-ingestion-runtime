@@ -11,8 +11,8 @@
 - [x] Advance watermark only after durable downstream ACK for all required handoffs.
 - [x] Transactional outbox with short claim/completion transactions and leased DELIVERING state.
 - [ ] Idempotency/deduplication ledger and ordering per source object/partition.
-- [ ] PostgreSQL job scheduler, fairness, admission control and multi-worker `SKIP LOCKED` leases.
-- [ ] Retry budgets, exponential backoff, circuit breaker and source HEALTHY/DEGRADED/PAUSED.
+- [x] PostgreSQL job scheduler, tenant fairness, global/per-source admission, workload priority, pressure hysteresis and multi-worker `SKIP LOCKED` leases.
+- [x] Persisted finite-window retry budgets, exponential backoff, `Retry-After`, selective circuit breaker and source HEALTHY/DEGRADED/PAUSED/recovery probe.
 - [x] Quarantine and replay execution with immutable attempt history, parent evidence, idempotency and explicit REPRODUCE/REPROCESS_CURRENT/REPROCESS_TARGET modes.
 - [x] Cross-module quarantine handoff: Onboarding intake quarantine remains distinct from runtime record/batch quarantine.
 - [ ] Schema observation/drift isolation; never guess mappings.
@@ -25,7 +25,7 @@
 - [ ] Gateway-only OGC WFS adapter with paging and CRS/axis-order evidence.
 - [x] INTERNAL_MANAGED CSV adapter: one row = one source object.
 - [x] INTERNAL_MANAGED XLSX adapter: explicit sheet policy; formulas never executed.
-- [ ] Bounded payload/page/record sizes and streaming memory safety.
+- [x] Bounded response/file, page and record sizes; remote bootstrap is consumed page-by-page without whole-bootstrap accumulation.
 - [x] Adapter errors classified as transient, authorization/route, configuration, data or programming.
 
 ## Processing and handoff
