@@ -1,6 +1,7 @@
 openapi: 3.1.0
 info: {title: OUF Ingestion Runtime Internal API, version: 1.0.0}
 servers: [{url: /api/internal/v1/ingestion}]
+security: [{workloadBearer: []}]
 paths:
   /contracts/runs/{runId}:
     get:
@@ -41,6 +42,8 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/HoldRequest'}}}}
       responses: {'200': {description: Append-only legal-hold decision recorded and audited}}
 components:
+  securitySchemes:
+    workloadBearer: {type: http, scheme: bearer, bearerFormat: JWT}
   parameters:
     RunId: {in: path, name: runId, required: true, schema: {type: string, format: uuid}}
   schemas:

@@ -4,9 +4,9 @@ COPY pom.xml .
 COPY src src
 COPY contracts contracts
 RUN mvn -B -ntp -DskipTests package
-FROM eclipse-temurin:21-jre
-RUN groupadd -g 10002 ouf && useradd -r -u 10002 -g ouf ouf
+FROM gcr.io/distroless/java21-debian13:nonroot
 WORKDIR /app
 COPY --from=build /build/target/ingestion-runtime-*.jar app.jar
 USER 10002:10002
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["java","-jar","/app/app.jar"]

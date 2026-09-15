@@ -10,4 +10,12 @@ spring:
     create-schemas: true
 management:
   endpoints.web.exposure.include: health,info,prometheus,metrics
-server.port: ${PORT:8080}
+  endpoint.health.probes.enabled: true
+  endpoint.health.group.readiness.include: readinessState,ingestionReadiness
+  health:
+    livenessstate.enabled: true
+    readinessstate.enabled: true
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+spring.lifecycle.timeout-per-shutdown-phase: 30s

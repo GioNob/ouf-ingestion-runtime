@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: {name: {{ include "ouf-ingestion.name" . }}}
+spec:
+  groups:
+    - name: ouf-ingestion-slo
+      rules:
+        - alert: OufIngestionNotReady
+          expr: max(up{job="ouf-ingestion"}) < 1
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: "Ingestion readiness unavailable"}
+        - alert: OufIngestionOutboxBacklog
+          expr: max(ouf_ingestion_outbox_backlog) > 5000
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: "Ingestion outbox exceeds hard-pressure baseline"}
+        - alert: OufIngestionCircuitOpen
+          expr: max(ouf_ingestion_sources_circuit_open) > 0
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: "One or more ingestion sources remain paused"}

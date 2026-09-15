@@ -1,6 +1,7 @@
 openapi: 3.1.0
 info: {title: OUF Ingestion Runtime Trusted Human API, version: 1.0.0}
 servers: [{url: /api/trusted-human/v1/ingestion}]
+security: [{trustedHumanBearer: []}]
 paths:
   /runs/{id}:
     get:
@@ -190,6 +191,8 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [query, dimension], properties: {query: {$ref: '#/components/schemas/LogQuery'}, dimension: {type: string, enum: [severity, event_type, source_id]}}}}}}
       responses: {'200': {description: Bounded server-side aggregation}, '403': {description: Forbidden}}
 components:
+  securitySchemes:
+    trustedHumanBearer: {type: http, scheme: bearer, bearerFormat: JWT}
   parameters:
     Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
   schemas:
