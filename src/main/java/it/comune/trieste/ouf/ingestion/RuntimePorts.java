@@ -20,5 +20,5 @@ public final class RuntimePorts {private RuntimePorts(){}
   }
   public interface SemanticPort {void preflight(Collection<String> pinnedReferences);}
   public interface DurableHandoffPort {Receipt deliver(UUID handoffId,Map<String,Object> payload,String idempotencyKey);record Receipt(String reference,boolean durable){}}
-  public interface ReplayExecutionPort {Receipt execute(UUID replayId,UUID quarantineId,String targetBundleRef,String correlationId);record Receipt(UUID processingAttemptId,String downstreamReceiptRef,boolean durable){}}
+  public interface ReplayExecutionPort {Receipt execute(UUID replayId,UUID quarantineId,String targetBundleRef,String correlationId);default Receipt execute(ReplayPlan plan){return execute(plan.replayId(),plan.quarantineId(),plan.targetBundleRef(),plan.correlationId());}record ReplayPlan(UUID replayId,UUID quarantineId,String mode,UUID originalRunId,String originalBundleRef,String targetBundleRef,String rawObjectRef,UUID parentAttemptId,String correlationId){}record Receipt(UUID processingAttemptId,String downstreamReceiptRef,boolean durable){}}
 }

@@ -2,6 +2,40 @@ openapi: 3.1.0
 info: {title: OUF Ingestion Runtime Trusted Human API, version: 1.0.0}
 servers: [{url: /api/trusted-human/v1/ingestion}]
 paths:
+  /runs/{id}:
+    get:
+      operationId: getIngestionRun
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-authorization-capability: ingestion.run.read
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: Tenant-scoped run state and pinned bundle reference}, '404': {description: Not found in actor tenant}}
+  /runs/{id}/pause:
+    post:
+      operationId: pauseIngestionRun
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ingestion.run.pause
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunControlRequest'}}}}
+      responses: {'200': {description: Run paused with checkpoint watermark and outbox preserved}, '409': {description: Terminal run or optimistic conflict}}
+  /runs/{id}/resume:
+    post:
+      operationId: resumeIngestionRun
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ingestion.run.resume
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunControlRequest'}}}}
+      responses: {'200': {description: Original pinned baseline revalidated and run resumed}, '409': {description: Run is not paused or optimistic conflict}}
+  /runs/{id}/abort:
+    post:
+      operationId: abortIngestionRun
+      x-ouf-mcp-tool-eligible: false
+      x-ouf-requires-human-user: true
+      x-ouf-authorization-capability: ingestion.run.abort
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunControlRequest'}}}}
+      responses: {'200': {description: Run terminally aborted without watermark advancement}, '409': {description: Terminal run or optimistic conflict}}
   /issues:
     get:
       operationId: searchIngestionRuntimeIssues
@@ -171,8 +205,15 @@ components:
       additionalProperties: false
     ReplayRequest:
       type: object
-      required: [targetBundleRef]
-      properties: {targetBundleRef: {type: string, minLength: 1}}
+      required: [mode]
+      properties:
+        mode: {type: string, enum: [REPRODUCE, REPROCESS_CURRENT, REPROCESS_TARGET]}
+        targetBundleRef: {type: string, minLength: 1, description: Required only for REPROCESS_TARGET}
+      additionalProperties: false
+    RunControlRequest:
+      type: object
+      required: [expectedVersion]
+      properties: {expectedVersion: {type: integer, minimum: 0}}
       additionalProperties: false
     RetryRequest:
       type: object
