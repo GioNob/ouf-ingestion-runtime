@@ -39,7 +39,7 @@ public class RunStateRepository {
       sql.sql("insert into ouf_ingestion.source_health(source_id,status,consecutive_failures,last_error_code) values(:s,'DEGRADED',0,:c) on conflict(source_id) do update set status='DEGRADED',consecutive_failures=0,circuit_open_until=null,retry_not_before=null,recovery_probe_owner=null,recovery_probe_until=null,last_error_code=:c,updated_at=transaction_timestamp()").param("s",source).param("c",safe(code)).update();
       return;
     }
-    Map<String,Object> budget=sql.sql("select consecutive_failures,retry_attempts_in_window,retry_window_started_at from ouf_ingestion.source_health where source_id=:s").param("s",source).query().optional().orElse(Map.of());
+    List<Map<String,Object>> budgets=sql.sql("select consecutive_failures,retry_attempts_in_window,retry_window_started_at from ouf_ingestion.source_health where source_id=:s").param("s",source).query().list();Map<String,Object> budget=budgets.isEmpty()?Map.of():budgets.getFirst();
     int failures=((Number)budget.getOrDefault("consecutive_failures",0)).intValue()+1;
     boolean newWindow=budget.get("retry_window_started_at")==null||sql.sql("select retry_window_started_at+(retry_window_seconds*interval '1 second')<=transaction_timestamp() from ouf_ingestion.source_health where source_id=:s").param("s",source).query(Boolean.class).single();
     int attempts=newWindow?1:((Number)budget.getOrDefault("retry_attempts_in_window",0)).intValue()+1;long base=Math.min(900,5L<<Math.min(attempts-1,7));long jitter=Math.floorMod(Objects.hash(source,safe(code),attempts),Math.max(1,(int)(base/5)+1));long delay=base+jitter;
