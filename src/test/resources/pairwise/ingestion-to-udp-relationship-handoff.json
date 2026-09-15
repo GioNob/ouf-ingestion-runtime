@@ -6,7 +6,9 @@
     "sourceId": "worksites",
     "typeCode": "WORKSITE",
     "sourceObjectId": "work-1",
-    "observedAt": "2026-09-12T00:00:00Z"
+    "sourceRevision": "rev-17",
+    "observedAt": "2026-09-12T00:00:00Z",
+    "validFrom": "2026-09-10T00:00:00Z"
   },
   "operation": "UPSERT",
   "canonicalPayload": {
@@ -20,9 +22,13 @@
     "bundleRef": "bundle://worksites/1",
     "semanticPublicationSetRef": "semantic://urban/1",
     "adapterProfileRef": "adapter://managed/1",
+    "authorityPolicyRef": "authority://worksites/1",
     "mappingRefs": ["mapping://worksites/1"],
     "relationshipResolutionStrategyRefs": ["relationship://located-on/1"]
   },
+  "dataAccessLabels": [
+    {"labelId": "PUBLIC", "version": "1"}
+  ],
   "lineageId": "pairwise-lineage-1",
   "contentHash": "sha256:pairwise-worksite-1",
   "acquiredAt": "2026-09-12T00:00:00Z",
