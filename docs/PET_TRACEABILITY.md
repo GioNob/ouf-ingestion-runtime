@@ -30,14 +30,14 @@
 
 ## Processing and handoff
 
-- [ ] Canonical Data Envelope rc3 validation.
+- [x] Canonical Data Envelope rc3 validation.
 - [ ] Technical normalization, configured field/vocabulary mapping and runtime validation.
 - [x] SourceObjectIdentityPolicy behavior with duplicate/reorder tests for managed files.
-- [ ] Candidate canonical object and unresolved-relationship handoff only; UDP owns resolution.
-- [ ] HandoffPayload rc3 and LineageRecord rc3 validation.
+- [x] Candidate canonical object and unresolved-relationship handoff only; UDP owns resolution.
+- [x] HandoffPayload rc3 and LineageRecord rc3 validation.
 - [x] Durable ACK idempotency and downstream receipt reference.
-- [ ] Data Lake raw/normalized/curated ports with content addressing.
-- [ ] ChangeRepresentationProfile/delta-aware handoff.
+- [x] Data Lake raw/normalized/curated ports with content addressing.
+- [x] ChangeRepresentationProfile/delta-aware handoff, including historical FULL_SNAPSHOT default, delta base/event evidence and no UDP current-state dependency.
 
 ## Security and operations
 
@@ -55,7 +55,7 @@
 
 ## Evidence gates
 
-- [ ] Frozen contract checksums and JSON Schema positive/negative fixtures.
+- [x] Frozen contract checksums and JSON Schema positive/negative fixtures, including classpath resolution of the common DataAccessLabel contract.
 - [ ] PostgreSQL 17 migrations, upgrade, concurrency, crash/restart and rollback tests.
 - [ ] Adapter contract suite and Gateway/UDP fault fixtures.
 - [ ] Managed CSV/XLSX and REST/WFS vertical slices.

@@ -1,4 +1,5 @@
 e565ca0657172de0f80251204a1eaea75072932acb3b2479ed84daae616ef769  contracts/rc3/canonical-data-envelope-v1.json
+00ebb3f34e98e5af7e9796d16957fefd6479871463ce849f3fa67970557870ee  contracts/common/data-access-label-v1.json
 1c8f6bd16905c6ec6ef8af8fa003bac05e809257b4e7a3f7a142a284c844dab6  contracts/rc3/handoff-payload-v1.json
 774e6db9225e1c07ef527e7a5cd3ad01eee60ddb9ed175f69ce9c8a78839fb67  contracts/rc3/job-status-v1.json
 262174654e5cbbff767e04f343d98c6ab21dfaa7cd0d877ef13d4cb8f542ca19  contracts/rc3/lineage-record-v1.json

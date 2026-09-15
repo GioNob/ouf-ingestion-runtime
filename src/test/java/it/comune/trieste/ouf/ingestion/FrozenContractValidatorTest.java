@@ -18,4 +18,10 @@ class FrozenContractValidatorTest {
     Map<String,Object> handoff=new LinkedHashMap<>(Map.of("handoffId","h","ingestionRunId","r","ingestionId","i","sourceIdentity",Map.of("sourceId","s","typeCode","t","sourceObjectId","o"),"operation","UPSERT","contractRefs",Map.of("sourceSchemaRef","s:1","bundleRef","b:1","semanticPublicationSetRef","p:1","adapterProfileRef","a:1"),"lineageId","l","contentHash","sha256:x","acquiredAt","2026-01-01T00:00:00Z","changeRepresentation",Map.of("mode","FULL_SNAPSHOT")));
     assertThatThrownBy(()->validator.validate(Path.of("contracts/rc3/handoff-payload-v1.json"),handoff)).isInstanceOf(FrozenContractValidator.ContractViolation.class);
   }
+  @Test void resolvesCommonLabelReferenceFromClasspathAndRejectsMalformedLabel(){
+    Map<String,Object> handoff=new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId","h"),Map.entry("ingestionRunId","r"),Map.entry("ingestionId","i"),Map.entry("sourceIdentity",Map.of("sourceId","s","typeCode","t","sourceObjectId","o")),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of()),Map.entry("contractRefs",Map.of("sourceSchemaRef","s:1","bundleRef","b:1","semanticPublicationSetRef","p:1","adapterProfileRef","a:1")),Map.entry("lineageId","l"),Map.entry("contentHash","sha256:x"),Map.entry("acquiredAt","2026-01-01T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT")),Map.entry("dataAccessLabels",List.of(Map.of("labelId","PUBLIC","version","1")))));
+    validator.validate("/contracts/rc3/handoff-payload-v1.json",handoff);
+    handoff.put("dataAccessLabels",List.of(Map.of("version","1")));
+    assertThatThrownBy(()->validator.validate("/contracts/rc3/handoff-payload-v1.json",handoff)).isInstanceOf(FrozenContractValidator.ContractViolation.class).extracting("paths").asList().contains("$.dataAccessLabels[0].labelId");
+  }
 }
