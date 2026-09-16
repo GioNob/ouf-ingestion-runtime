@@ -15,10 +15,11 @@ public class TrustedAuthorizationContext {
     Principal principal=request.getUserPrincipal();
     String type=attribute(request,ACTOR_TYPE),tenant=attribute(request,TENANT),decision=attribute(request,DECISION);
     if(principal==null||type==null||tenant==null||decision==null)throw denied("ING_TRUST_CONTEXT_REQUIRED");
+    if(!Set.of("HUMAN","SERVICE","AI_AGENT").contains(type))throw denied("ING_ACTOR_TYPE_INVALID");
     Object raw=request.getAttribute(CAPABILITIES);Set<String> capabilities=new HashSet<>();if(raw instanceof Collection<?> c)c.forEach(x->capabilities.add(String.valueOf(x)));
     return new Context(principal.getName(),type,tenant,Set.copyOf(capabilities),decision);
   }
-  public Context require(HttpServletRequest request,String capability,boolean human){Context c=resolve(request);if(human&&!"HUMAN_USER".equals(c.actorType()))throw denied("ING_HUMAN_USER_REQUIRED");if(!c.capabilities().contains(capability))throw denied("ING_CAPABILITY_REQUIRED");return c;}
+  public Context require(HttpServletRequest request,String capability,boolean human){Context c=resolve(request);if(human&&!"HUMAN".equals(c.actorType()))throw denied("ING_HUMAN_USER_REQUIRED");if(!c.capabilities().contains(capability))throw denied("ING_CAPABILITY_REQUIRED");return c;}
   private static String attribute(HttpServletRequest r,String name){Object v=r.getAttribute(name);return v instanceof String s&&!s.isBlank()?s:null;}
   private static ResponseStatusException denied(String code){return new ResponseStatusException(HttpStatus.FORBIDDEN,code);}
   public record Context(String subject,String actorType,String tenantId,Set<String> capabilities,String decisionRef){}
