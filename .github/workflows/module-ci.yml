@@ -16,8 +16,14 @@ jobs:
       OUF_ING_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_ingestion
       OUF_ING_DB_USER: ouf_ingestion
       OUF_ING_DB_PASSWORD: ci-only-password
+      AUTHORIZATION_PAIRWISE_ROOT: ${{ github.workspace }}/.pairwise/authorization
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: fb2dd51dfc204577a47c1e702f17531dd0709b3c
+          path: .pairwise/authorization
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify and package
@@ -29,7 +35,14 @@ jobs:
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
-        with: {name: 'ingestion-evidence-${{ github.run_id }}', path: 'target/surefire-reports/', retention-days: 30}
+        with:
+          name: ingestion-evidence-${{ github.run_id }}
+          path: |
+            target/surefire-reports/
+            docs/AUTHORIZATION_INGESTION_PAIRWISE_TRACEABILITY.md
+            src/main/java/it/comune/trieste/ouf/ingestion/TrustedAuthorizationContext.java
+            src/test/java/it/comune/trieste/ouf/ingestion/AuthorizationIngestionPairwiseTest.java
+          retention-days: 30
   disaster-recovery-drill:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
