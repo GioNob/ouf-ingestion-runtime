@@ -1,0 +1,34 @@
+name: Shared Authorization SDK pairwise
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  pinned-sdk-consumer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AUTHORIZATION_PAIRWISE_ROOT: ${{ github.workspace }}/.pairwise/authorization
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: 63f238fa78abe2e6834430af618366ce865977fd
+          path: .pairwise/authorization
+      - name: Verify canonical SDK source mirror
+        run: diff -r .pairwise/authorization/authorization-sdk vendor/authorization-sdk
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Build shared SDK and execute consumer boundary tests
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 10m mvn -B -ntp -Dtest=AuthorizationIngestionPairwiseTest test
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authorization-sdk-consumer-evidence
+          path: |
+            target/surefire-reports/
+            vendor/authorization-sdk/target/surefire-reports/
+            vendor/AUTHORIZATION_SDK_SOURCE.json
+            vendor/authorization-sdk/SOURCE_SHA256SUMS
