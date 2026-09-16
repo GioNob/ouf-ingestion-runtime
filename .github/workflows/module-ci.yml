@@ -22,16 +22,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: fb2dd51dfc204577a47c1e702f17531dd0709b3c
+          ref: 63f238fa78abe2e6834430af618366ce865977fd
           path: .pairwise/authorization
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify and package
-        run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Validate OpenAPI release contract
-        run: mvn -B -ntp -Dtest=OpenApiReleaseGateTest test
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -Dtest=OpenApiReleaseGateTest test
       - name: Build non-root container
         run: docker build -t ouf-ingestion:${{ github.sha }} . && test "$(docker image inspect ouf-ingestion:${{ github.sha }} --format '{{.Config.User}}')" = "10002:10002"
+      - name: Verify runtime SDK packaging
+        run: |
+          jar tf target/ingestion-runtime-*.jar > target/sdk-packaging.txt
+          grep -q 'BOOT-INF/lib/authorization-sdk-1.0.0.jar' target/sdk-packaging.txt
+          if grep -q 'authorization-sdk-1.0.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -51,7 +60,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Package recovery subject
-        run: mvn -B -ntp -DskipTests package
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
       - name: Execute PostgreSQL restore drill
         run: bash scripts/ci/postgres-restore-drill.sh
       - name: Upload recovery evidence
@@ -66,7 +77,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Package application and CycloneDX SBOM
-        run: mvn -B -ntp -DskipTests package
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
       - name: Validate SBOM
         run: test -s target/classes/META-INF/sbom/application.cdx.json && python3 -c "import json; b=json.load(open('target/classes/META-INF/sbom/application.cdx.json')); assert b['bomFormat']=='CycloneDX' and b.get('components')"
       - name: Build deployable image

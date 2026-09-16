@@ -31,18 +31,13 @@ class AuthorizationIngestionPairwiseTest {
     assertThat(schema.at("/x-ouf-decision/required").toString())
         .contains("decisionRef", "bundleId", "bundleVersion");
 
-    HttpServletRequest request = mock(HttpServletRequest.class);
-    Principal principal = () -> "human:alice";
-    when(request.getUserPrincipal()).thenReturn(principal);
-    when(request.getAttribute(TrustedAuthorizationContext.ACTOR_TYPE)).thenReturn("HUMAN");
-    when(request.getAttribute(TrustedAuthorizationContext.TENANT)).thenReturn("tenant-a");
-    when(request.getAttribute(TrustedAuthorizationContext.CAPABILITIES)).thenReturn(Set.of("operations.status.read"));
-    when(request.getAttribute(TrustedAuthorizationContext.DECISION)).thenReturn("baseline:7:ouf.operations.summary");
-
+    var request=new org.springframework.mock.web.MockHttpServletRequest();
+    it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"human:alice","HUMAN",Set.of("operations.status.read"));
+    request.setAttribute("ouf.capabilities",Set.of("forged.allow"));
     var context = new TrustedAuthorizationContext().require(request, "operations.status.read", true);
     assertThat(context.actorType()).isEqualTo("HUMAN");
     assertThat(context.tenantId()).isEqualTo("tenant-a");
-    assertThat(context.decisionRef()).isEqualTo("baseline:7:ouf.operations.summary");
+    assertThat(context.decisionRef()).isEqualTo("fixture:1");
   }
 
   @Test
@@ -55,7 +50,7 @@ class AuthorizationIngestionPairwiseTest {
     when(legacy.getAttribute(TrustedAuthorizationContext.DECISION)).thenReturn("decision:legacy");
     assertThatThrownBy(() -> new TrustedAuthorizationContext().resolve(legacy))
         .isInstanceOf(ResponseStatusException.class)
-        .hasMessageContaining("ING_ACTOR_TYPE_INVALID");
+        .hasMessageContaining("TRUSTED_PRINCIPAL_REQUIRED");
 
     HttpServletRequest missingDecision = mock(HttpServletRequest.class);
     when(missingDecision.getUserPrincipal()).thenReturn((Principal) () -> "service:mcp");
@@ -64,6 +59,6 @@ class AuthorizationIngestionPairwiseTest {
     when(missingDecision.getAttribute(TrustedAuthorizationContext.CAPABILITIES)).thenReturn(Set.of("operations.status.read"));
     assertThatThrownBy(() -> new TrustedAuthorizationContext().resolve(missingDecision))
         .isInstanceOf(ResponseStatusException.class)
-        .hasMessageContaining("ING_TRUST_CONTEXT_REQUIRED");
+        .hasMessageContaining("TRUSTED_PRINCIPAL_REQUIRED");
   }
 }
