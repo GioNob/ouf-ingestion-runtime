@@ -10,24 +10,18 @@ import org.springframework.web.bind.annotation.*;
 public class OperationalAwarenessApi {
   private final OperationalAwarenessService service;private final TrustedAuthorizationContext authorization;
   public OperationalAwarenessApi(OperationalAwarenessService service,TrustedAuthorizationContext authorization){this.service=service;this.authorization=authorization;}
+  public record Query(String sourceId,String state,OffsetDateTime since,Integer limit){}
+  private static int limit(Query q){return q==null||q.limit()==null?50:q.limit();}
 
-  @GetMapping("/status")
-  Map<String,Object> status(@RequestParam(required=false)String sourceId,@RequestParam(defaultValue="50")int limit,HttpServletRequest request){
-    var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.status(sourceId,limit,actor),"partial",false);
-  }
+  @PostMapping("/status")
+  Map<String,Object> status(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.status(q==null?null:q.sourceId(),limit(q),actor),"partial",false);}
 
-  @GetMapping("/history")
-  Map<String,Object> history(@RequestParam(required=false)String sourceId,@RequestParam(required=false)OffsetDateTime since,@RequestParam(defaultValue="50")int limit,HttpServletRequest request){
-    var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.history(sourceId,since,limit,actor),"partial",false);
-  }
+  @PostMapping("/history")
+  Map<String,Object> history(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.history(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),"partial",false);}
 
-  @GetMapping("/incidents")
-  Map<String,Object> incidents(@RequestParam(required=false)String state,@RequestParam(required=false)String sourceId,@RequestParam(required=false)OffsetDateTime since,@RequestParam(defaultValue="50")int limit,HttpServletRequest request){
-    var actor=authorization.require(request,"operations.incident.read",false);return Map.of("items",service.incidents(state,sourceId,since,limit,actor),"partial",false);
-  }
+  @PostMapping("/incidents")
+  Map<String,Object> incidents(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"operations.incident.read",false);return Map.of("items",service.incidents(q==null?null:q.state(),q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),"partial",false);}
 
-  @GetMapping("/summary")
-  Map<String,Object> summary(@RequestParam(required=false)String sourceId,@RequestParam(required=false)OffsetDateTime since,@RequestParam(defaultValue="50")int limit,HttpServletRequest request){
-    var actor=authorization.require(request,"operations.status.read",false);return service.summary(sourceId,since,limit,actor);
-  }
+  @PostMapping("/summary")
+  Map<String,Object> summary(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"operations.status.read",false);return service.summary(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor);}
 }
