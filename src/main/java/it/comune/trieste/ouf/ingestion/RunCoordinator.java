@@ -17,7 +17,7 @@ public class RunCoordinator {
     try{ExecutionBundle b=bundles.loadAndVerify(c);run=state.createPreflightRun(c,b,UUID.randomUUID().toString());semantic.preflight(b);state.completePreflight(c,run);}
     catch(RuntimeException failure){
       Failure classified=classify(failure);
-      try{if(run!=null)state.failPreflight(c,run,classified.code());state.recordFailure(c.sourceId(),classified.code(),classified.errorClass(),classified.retryAfter());state.releaseSchedule(c,false);}catch(IllegalStateException lost){LOG.warn("ING_SCHEDULE_RECOVERY_REQUIRED");}
+      try{if(c.publicationId()!=null)state.activationFailed(c,run,classified);else{if(run!=null)state.failPreflight(c,run,classified.code());state.recordFailure(c.sourceId(),classified.code(),classified.errorClass(),classified.retryAfter());state.releaseSchedule(c,false);}}catch(IllegalStateException lost){LOG.warn("ING_SCHEDULE_RECOVERY_REQUIRED");}
       LOG.atWarn().addKeyValue("event","INGESTION_PREFLIGHT_FAILED").addKeyValue("runId",run).addKeyValue("sourceId",c.sourceId()).addKeyValue("errorCode",classified.code()).log("Ingestion run preflight failed");return Optional.empty();
     }
     state.recordSuccess(c.sourceId());LOG.atInfo().addKeyValue("event","INGESTION_RUN_STARTED").addKeyValue("runId",run).addKeyValue("sourceId",c.sourceId()).log("Ingestion run passed preflight");return Optional.of(run);

@@ -13,3 +13,4 @@ ALTER TABLE ouf_ingestion.ing_schedule ADD CONSTRAINT ing_schedule_trigger_caden
 ALTER TABLE ouf_ingestion.ing_run ADD COLUMN schedule_id uuid REFERENCES ouf_ingestion.ing_schedule ON DELETE RESTRICT, ADD COLUMN schedule_due_at timestamptz;
 CREATE UNIQUE INDEX ing_run_schedule_slot ON ouf_ingestion.ing_run(schedule_id,schedule_due_at) WHERE schedule_id IS NOT NULL;
 COMMENT ON COLUMN ouf_ingestion.ing_schedule.sync_profile IS 'Exact publisher-owned schedule and operational policy; no implicit source-specific defaults.';
+ALTER TABLE ouf_ingestion.ing_schedule ADD COLUMN activation_failures integer NOT NULL DEFAULT 0, ADD COLUMN activation_first_failure_at timestamptz, ADD COLUMN activation_blocked boolean NOT NULL DEFAULT false;

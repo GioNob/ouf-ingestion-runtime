@@ -7,6 +7,9 @@ import java.net.http.*;
 import java.nio.file.*;
 import java.time.Duration;
 import java.util.*;
+import java.nio.ByteBuffer;
+import java.util.concurrent.*;
+import java.util.concurrent.Flow;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -38,9 +41,19 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
  }
  @SuppressWarnings("unchecked") private Map<String,Object> get(String path){
   try{String token=Files.readString(tokenFile).strip();if(token.isEmpty()||token.length()>16384||token.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
-   var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString()).GET().build();var response=http.send(request,HttpResponse.BodyHandlers.ofInputStream());
-   try(var body=response.body()){byte[] bytes=body.readNBytes(2097153);if(bytes.length>2097152)throw new IllegalArgumentException("ING_PUBLICATION_RESPONSE_TOO_LARGE");if(response.statusCode()!=200)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);return json.readValue(bytes,Map.class);}
+   var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString()).GET().build();var pending=http.sendAsync(request,info->new BoundedBody());HttpResponse<byte[]> response;
+   try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_RESPONSE_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
+   if(response.statusCode()!=200)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
+   return json.readValue(response.body(),Map.class);
   }catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(IOException e){throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_IO_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
+ }
+ private static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
+  private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();private Flow.Subscription subscription;
+  public CompletionStage<byte[]> getBody(){return result;}
+  public void onSubscribe(Flow.Subscription s){subscription=s;s.request(1);}
+  public void onNext(List<ByteBuffer> buffers){for(var b:buffers){if(bytes.size()+b.remaining()>2097152){subscription.cancel();result.completeExceptionally(new IOException("ING_PUBLICATION_RESPONSE_TOO_LARGE"));return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
+  public void onError(Throwable error){result.completeExceptionally(error);}
+  public void onComplete(){result.complete(bytes.toByteArray());}
  }
  private static String escape(String s){return URLEncoder.encode(s,java.nio.charset.StandardCharsets.UTF_8);}
  public record Page(List<Map<String,Object>> items,String nextAfter){}
