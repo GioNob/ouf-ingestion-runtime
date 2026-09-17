@@ -18,7 +18,7 @@ jobs:
       R2C_SEMANTIC_SHA: cfef6777ff14c218182c06682c6663840437d3d2
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
       R2B_PUBLISHER_SHA: 4afc9f6d01cb2c945d348751f093eefbb5140980
-      R2B_UDP_SHA: ba715ca1b923c6d4a52db7fe436b2386047def29
+      R2B_UDP_SHA: 83f2ffb7a45413d8534540934d7a953eb747236f
       OUF_R2E_INPUT: ${{ github.workspace }}/src/test/resources/geopackage/cameras.gpkg
       OUF_R2E_INPUT_RELOADED: ${{ github.workspace }}/src/test/resources/geopackage/cameras-reloaded.gpkg
       PGPASSWORD: ci-only-password
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-udp-object-resolution
-          ref: ba715ca1b923c6d4a52db7fe436b2386047def29
+          ref: 83f2ffb7a45413d8534540934d7a953eb747236f
           path: .pairwise/udp
       - uses: actions/checkout@v4
         with:
@@ -65,6 +65,7 @@ jobs:
         if: always()
         run: |
           if test -f target/r2e-evidence/summary.json; then cat target/r2e-evidence/summary.json; fi
+          if test -f target/r2e-evidence/diagnostics.json; then cat target/r2e-evidence/diagnostics.json; fi
           for log in target/r2e-evidence/*.log; do if test -f "$log"; then tail -n 70 "$log"; fi; done
       - uses: actions/upload-artifact@v4
         if: always()

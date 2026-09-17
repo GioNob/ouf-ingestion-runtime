@@ -77,6 +77,7 @@ try:
  env.update(OUF_ING_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_ING_DB_USER='ouf',OUF_ING_DB_PASSWORD=os.environ['PGPASSWORD'])
  args=['java','-jar',str(next((root/'target').glob('ingestion-runtime-*.jar'))),'--server.port=18133','--ouf.ingestion.activation.enabled=true','--ouf.ingestion.execution.enabled=true','--ouf.ingestion.activation.gateway-url=http://127.0.0.1:18132','--ouf.ingestion.activation.token-file='+str(tokenfile),'--ouf.ingestion.activation.tenant-id=tenant-a','--ouf.ingestion.activation.poll-ms=500']
  runtime=launch('ingestion',args,env)
+ wait(lambda:http('http://127.0.0.1:18133/actuator/health')['status']=='UP')
  wait(lambda:sql("select count(*) from ouf_ingestion.ing_run where state='SUCCEEDED'")=='1',180)
  wait(lambda:sql("select count(*) from ouf_udp.urban_object_current_state")=='2')
  check('one_object_per_camera_feature',sql("select count(*) from ouf_udp.urban_object where canonical_type='https://example.org/Camera'")=='2')
@@ -96,7 +97,7 @@ try:
  incoming=http('http://127.0.0.1:18132/api/udp/v1/objects/'+cabinet+'/relationships?direction=INBOUND',human)
  check('cabinet_navigates_back_to_camera',camera in json.dumps(incoming))
  before=http('http://127.0.0.1:18132/api/udp/v1/objects/'+camera,human)
- check('original_and_canonical_geometry_available','originalGeometry' in before and 'canonicalGeometry' in before)
+ check('original_and_canonical_geometry_available',before.get('properties',{}).get('https://example.org/geom',{}).get('crs')=='EPSG:4326' and 'canonicalGeometry' in before)
  old_publication=http('http://127.0.0.1:18131/api/onboarding/v1/runtime/publications/r2e-cameras/active')
  old_ids=sql("select string_agg(urban_object_id::text,',' order by urban_object_id) from ouf_udp.urban_object where canonical_type='https://example.org/Camera'")
  post('reload')
@@ -124,6 +125,12 @@ try:
  (evidence/'human-scenario.json').write_text(json.dumps({'cameraBefore':before,'relationBefore':relation,'cameraAfter':after,'lineage':lineage},indent=2))
  (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_IDENTITY_FIXTURES','limitations':['2D simple features only; 10 MiB files and 10000 features per layer','No territorial IGM certification; R2d limits unchanged','Browser, production IAM and Gateway deployment remain separate acceptance gates']},indent=2))
 finally:
+ diagnostics={}
+ for name,query in {'runs':"select coalesce(jsonb_agg(x),'[]'::jsonb) from (select source_id,state,failure_code from ouf_ingestion.ing_run limit 20)x",'udpJobs':"select coalesce(jsonb_agg(x),'[]'::jsonb) from (select state,safe_failure_code from ouf_udp.materialization_job limit 20)x",'checks':None}.items():
+  if query is None:diagnostics[name]=checks;continue
+  try:diagnostics[name]=json.loads(sql(query))
+  except Exception:pass
+ (evidence/'diagnostics.json').write_text(json.dumps(diagnostics,indent=2))
  for p in reversed(processes):
   p.terminate()
   try:p.wait(timeout=20)
