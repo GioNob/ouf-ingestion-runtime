@@ -1,0 +1,80 @@
+name: R2f Shapefile Access and weighted identity
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  source-to-serving:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5-alpine
+        env: {POSTGRES_DB: ouf, POSTGRES_USER: ouf, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf -d ouf" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      ONBOARDING_ROOT: ${{ github.workspace }}/.pairwise/onboarding
+      SEMANTIC_ROOT: ${{ github.workspace }}/.pairwise/semantic
+      R2C_SEMANTIC_SHA: 980d87c36f5efad4aa1e26edb460efa2423c59b3
+      UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
+      R2B_PUBLISHER_SHA: c908da8aabcdda0679c5894557cc6db62ac0e402
+      R2B_UDP_SHA: ea295745a1828cc2f7a2a70f27785b6162c4a4f4
+      OUF_R2F_INPUT_DIR: ${{ github.workspace }}/target/r2f-input
+      PGPASSWORD: ci-only-password
+      AWS_ACCESS_KEY_ID: minio-ci-access
+      AWS_SECRET_ACCESS_KEY: minio-ci-secret
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: c908da8aabcdda0679c5894557cc6db62ac0e402
+          path: .pairwise/onboarding
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-udp-object-resolution
+          ref: ea295745a1828cc2f7a2a70f27785b6162c4a4f4
+          path: .pairwise/udp
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-semantic-registry
+          ref: 980d87c36f5efad4aa1e26edb460efa2423c59b3
+          path: .pairwise/semantic
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Verify profiler and adapter parser parity
+        run: |
+          cmp src/main/java/it/comune/trieste/ouf/managed/AccessReader.java .pairwise/onboarding/src/main/java/it/comune/trieste/ouf/managed/AccessReader.java
+          cmp src/main/java/it/comune/trieste/ouf/managed/ShapefileReader.java .pairwise/onboarding/src/main/java/it/comune/trieste/ouf/managed/ShapefileReader.java
+      - name: Start real object storage
+        run: |
+          docker run -d --name r2b-minio -p 9000:9000 -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0; sleep 1; done
+          exit 1
+      - name: Build production applications and isolated identity fixtures
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
+          mvn -B -ntp -f .pairwise/onboarding/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          mvn -B -ntp -f .pairwise/udp/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          mvn -B -ntp -f .pairwise/semantic/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          if jar tf .pairwise/semantic/target/semantic-registry-*.jar | grep -q GovernedPublicationFixture; then exit 1; fi
+          if jar tf .pairwise/onboarding/target/source-onboarding-*.jar | grep -q ServingPublisherFixture; then exit 1; fi
+          if jar tf .pairwise/udp/target/udp-object-resolution-*.jar | grep -q ServingConsumerFixture; then exit 1; fi
+      - name: Verify managed formats, weighted identity, declared relationships and human reads
+        run: timeout --signal=TERM --kill-after=20s 10m python3 pairwise/r2f_managed_formats.py
+      - name: Print bounded diagnostic evidence
+        if: always()
+        run: |
+          if test -f target/r2f-evidence/summary.json; then cat target/r2f-evidence/summary.json; fi
+          if test -f target/r2f-evidence/diagnostics.json; then cat target/r2f-evidence/diagnostics.json; fi
+          for log in target/r2f-evidence/*.log; do if test -f "$log"; then tail -n 70 "$log"; fi; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r2f-managed-formats-evidence-${{ github.run_id }}
+          path: |
+            target/r2f-evidence/*.log
+            target/r2f-evidence/*.json
+          retention-days: 30
