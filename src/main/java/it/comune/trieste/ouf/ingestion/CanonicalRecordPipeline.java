@@ -10,8 +10,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Service;
 
 /** Record-level boundary: configured mapping, immutable lake evidence, rc3 contracts and durable outbox. */
-@Service
-@ConditionalOnBean(RuntimePorts.DataLakePort.class)
 public final class CanonicalRecordPipeline {
   private static final String ENVELOPE="/contracts/rc3/canonical-data-envelope-v1.json",LINEAGE="/contracts/rc3/lineage-record-v1.json",HANDOFF="/contracts/rc3/handoff-payload-v1.json";
   private final ObjectMapper json;private final FrozenContractValidator contracts;private final DurablePipelineRepository durable;private final QuarantineService quarantine;private final RuntimePorts.DataLakePort lake;private final Clock clock;
@@ -35,9 +33,10 @@ public final class CanonicalRecordPipeline {
       Map<String,Object> evidence=lineage(c,cfg,metadata,attempt,lineage,handoff,rawRef,rawHash,normalizedHash,outputHash,observed,acquired,refs);
       Map<String,Object> payload=handoff(c,cfg,metadata,lineage,handoff,rawRef,outputHash,observed,acquired,refs,candidate);
       contracts.validate(LINEAGE,evidence);contracts.validate(HANDOFF,payload);
-      durable.stage(new DurablePipelineRepository.StageCommand(c.runId(),c.partitionKey(),c.sequenceNo(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),bundleRef(c.bundle()),idempotency(c,"handoff"),payload,evidence,c.restartCheckpoint(),c.candidateWatermark()),attempt,lineage,handoff);
+      durable.stage(new DurablePipelineRepository.StageCommand(c.runId(),c.partitionKey(),c.sequenceNo(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),bundleRef(c.bundle()),idempotency(c,"handoff"),payload,evidence,c.restartCheckpoint(),c.candidateWatermark(),c.claim()),attempt,lineage,handoff);
       return new Result(attempt,lineage,handoff,null);
     }catch(RuntimeException failure){
+      if("ING_PARTITION_LEASE_LOST".equals(failure.getMessage()))throw failure;
       String code=safeCode(failure);UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);
       boolean blocking=!nonBlocking(c.bundle(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"contract-or-mapping:"+code,c.correlationId(),blocking);
       return new Result(failed,null,null,quarantineId,blocking);
@@ -87,6 +86,8 @@ public final class CanonicalRecordPipeline {
   private record RecordMetadata(Operation operation,String sourceRevision,String validFrom,String validTo,String baseRevisionRef,String baseContentHash,Object eventSequence,String geometryHash,String relationshipsHash,String contractEvidenceHash){}
   private record Config(String sourceSchemaRef,String sourceSchemaId,String sourceSchemaVersion,String typeCode,String semanticPublicationSetRef,String adapterProfileRef,String authorityPolicyRef,List<String> mappingRefs,List<String> relationshipResolutionStrategyRefs,List<Map<String,Object>> dataAccessLabels,List<Mapping> mappings,String observationPolicy,ChangeProfile changeProfile){}
   private record Mapping(String sourceField,String targetPropertyIri,String transform){}
-  public record Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){public Command{Objects.requireNonNull(runId);Objects.requireNonNull(bundle);Objects.requireNonNull(record);restartCheckpoint=Map.copyOf(restartCheckpoint);candidateWatermark=Map.copyOf(candidateWatermark);}}
+  public record Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark,RunExecutionRepository.Claim claim){
+    public Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,attemptNo,adapterId,bundle,record,correlationId,restartCheckpoint,candidateWatermark,null);}
+    public Command{Objects.requireNonNull(runId);Objects.requireNonNull(bundle);Objects.requireNonNull(record);restartCheckpoint=Map.copyOf(restartCheckpoint);candidateWatermark=Map.copyOf(candidateWatermark);}}
   public record Result(UUID processingAttemptId,UUID lineageId,UUID handoffId,UUID quarantineId,boolean blockingFailure){public Result(UUID processingAttemptId,UUID lineageId,UUID handoffId,UUID quarantineId){this(processingAttemptId,lineageId,handoffId,quarantineId,false);}public boolean succeeded(){return handoffId!=null;}}
 }

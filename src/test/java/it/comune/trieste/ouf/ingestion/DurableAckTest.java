@@ -35,6 +35,23 @@ import org.springframework.test.context.*;
 
   @Test void expiredDeliveringLeaseIsReclaimedAfterCrash(){UUID handoff=stage(run(),1);var lost=repository.claim("crashed",Duration.ofMinutes(1)).orElseThrow();assertThat(lost.handoffId()).isEqualTo(handoff);sql.sql("update ouf_ingestion.handoff_outbox set lease_until=transaction_timestamp()-interval '1 second' where handoff_id=:h").param("h",handoff).update();assertThat(repository.claim("recovery",Duration.ofMinutes(1)).orElseThrow().handoffId()).isEqualTo(handoff);}
 
+  @Test void expiredOrSupersededExecutionCannotStageOrAdvanceCheckpoint(){
+    UUID run=run();
+    sql.sql("update ouf_ingestion.ing_partition set lease_owner='old',lease_generation=1,lease_until=transaction_timestamp()-interval '1 second' where run_id=:r").param("r",run).update();
+    var old=new RunExecutionRepository.Claim(run,"default",Map.of(),1,"old");
+    assertThatThrownBy(()->repository.stage(fenced(run,old))).hasMessage("ING_PARTITION_LEASE_LOST");
+    assertThat(checkpoint(run)).isNull();
+    sql.sql("update ouf_ingestion.ing_partition set lease_owner='new',lease_generation=2,lease_until=transaction_timestamp()+interval '1 minute' where run_id=:r").param("r",run).update();
+    assertThatThrownBy(()->repository.stage(fenced(run,old))).hasMessage("ING_PARTITION_LEASE_LOST");
+    assertThat(sql.sql("select count(*) from ouf_ingestion.processing_attempt where run_id=:r").param("r",run).query(Long.class).single()).isZero();
+    repository.stage(fenced(run,new RunExecutionRepository.Claim(run,"default",Map.of(),2,"new")));
+    assertThat(checkpoint(run)).isEqualTo("1");assertThat(watermarks(run)).isZero();
+  }
+  private DurablePipelineRepository.StageCommand fenced(UUID run,RunExecutionRepository.Claim lease){
+    var c=command(run,1,"fenced-"+run,Map.of("row",1));
+    return new DurablePipelineRepository.StageCommand(c.runId(),c.partitionKey(),c.sequenceNo(),c.sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundleVersion(),c.bundleRef(),c.idempotencyKey(),c.payload(),c.evidence(),c.restartCheckpoint(),c.candidateWatermark(),lease);
+  }
+
   private UUID run(){UUID r=UUID.randomUUID();String source="source-"+r;sources.put(r,source);sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id) values(:r,:s,'b','1','sha256:x','MANAGED_ONCE','RUNNING','corr')").param("r",r).param("s",source).update();sql.sql("insert into ouf_ingestion.ing_partition(run_id,partition_key,state) values(:r,'default','RUNNING')").param("r",r).update();return r;}
   private UUID stage(UUID r,long n){return repository.stage(command(r,n,"idem-"+r+'-'+n,Map.of("row",n)));}
   private DurablePipelineRepository.StageCommand command(UUID r,long n,String key,Map<String,Object> payload){return new DurablePipelineRepository.StageCommand(r,"default",n,"object-"+n,1,"managed-tabular-v1","1","bundle:1",key,payload,Map.of("safe","evidence"),Map.of("ordinal",n),Map.of("ordinal",n));}
