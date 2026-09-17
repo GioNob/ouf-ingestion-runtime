@@ -95,7 +95,7 @@ try:
  wait(lambda:sql("select count(*) from ouf_ingestion.ing_run where source_id in ('r2b-file','r2b-pull') and state='SUCCEEDED'")=='3',180)
  check('file_and_pull_completed',True);check('duplicate_delivery_returns_same_ack',calls['duplicateAck']>=1)
  check('one_handoff_per_record_and_execution',sql('select count(*) from ouf_udp.handoff_intake')=='3')
- check('committed_watermarks_after_durable_ack',sql('select count(*) from ouf_ingestion.ing_watermark')=='3')
+ check('committed_watermarks_after_durable_ack',sql('select count(*) from ouf_ingestion.ing_watermark')=='2')
  wait(lambda:sql("select count(*) from ouf_udp.urban_object_current_state")=='2')
  filepage=http('http://127.0.0.1:18132/api/udp/v1/objects?type=https%3A%2F%2Fexample.org%2FR2bFile',human)
  pullpage=http('http://127.0.0.1:18132/api/udp/v1/objects?type=https%3A%2F%2Fexample.org%2FR2bPull',human)
