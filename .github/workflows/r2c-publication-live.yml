@@ -18,7 +18,7 @@ jobs:
       R2C_SEMANTIC_SHA: cfef6777ff14c218182c06682c6663840437d3d2
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
       R2B_PUBLISHER_SHA: c176caa5e4d1b8e2ea273bfae05916a390e76569
-      R2B_UDP_SHA: 8c1ca255b52fbbf0a1e8b4c9b31856b191dc6dde
+      R2B_UDP_SHA: a19d5447c8db0a2a8ae556ceae7a5225fa975f5b
       PGPASSWORD: ci-only-password
       AWS_ACCESS_KEY_ID: minio-ci-access
       AWS_SECRET_ACCESS_KEY: minio-ci-secret
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-udp-object-resolution
-          ref: 8c1ca255b52fbbf0a1e8b4c9b31856b191dc6dde
+          ref: a19d5447c8db0a2a8ae556ceae7a5225fa975f5b
           path: .pairwise/udp
       - uses: actions/checkout@v4
         with:
