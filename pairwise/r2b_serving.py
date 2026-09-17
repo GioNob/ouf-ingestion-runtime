@@ -46,10 +46,10 @@ class Gateway(BaseHTTPRequestHandler):
     self.reply(200,json.dumps({'semantic_id':'core','semantic_version':'1','revision_id':q['revisionId'][0],'publication_set_id':q['publicationSetId'][0],'status':'ACTIVE'}).encode());return
    elif path.path=='/internal/object-storage/v1/content':
     if auth!='Bearer '+token or parse_qs(path.query)!={'ref':['object://r2b/input.csv']}:self.send_error(403);return
-    self.reply(200,b'id,name\n1,Alpha\n');return
+    self.reply(200,b'id,name,secret\n1,Alpha,classified-file\n');return
    elif path.path=='/internal/sources/v1/fetch':
     if auth!='Bearer '+token or json.loads(data)['bindingRef']!='gateway://r2b/pull':self.send_error(403);return
-    self.reply(200,json.dumps({'items':[{'id':'2','name':'Beta'}]}).encode());return
+    self.reply(200,json.dumps({'items':[{'id':'2','name':'Beta','secret':'classified-pull'}]}).encode());return
    else:self.send_error(404);return
    request=urllib.request.Request(upstream,data=data,method=self.command,headers={'Authorization':auth,'Content-Type':'application/json'})
    with urllib.request.urlopen(request,timeout=15) as r:body=r.read(2_097_153);status=r.status
@@ -81,7 +81,7 @@ try:
  wait(lambda:sql("select count(*) from ouf_udp.urban_object_current_state")=='2')
  filepage=http('http://127.0.0.1:18132/api/udp/v1/objects?type=https%3A%2F%2Fexample.org%2FR2bFile',human)
  pullpage=http('http://127.0.0.1:18132/api/udp/v1/objects?type=https%3A%2F%2Fexample.org%2FR2bPull',human)
- check('authorized_file_read_contains_alpha','Alpha' in json.dumps(filepage));check('authorized_pull_read_contains_beta','Beta' in json.dumps(pullpage))
+ check('authorized_file_read_contains_alpha','Alpha' in json.dumps(filepage));check('authorized_pull_read_contains_beta','Beta' in json.dumps(pullpage));check('restricted_properties_omitted','classified' not in json.dumps([filepage,pullpage]) and 'https://example.org/secret' not in json.dumps([filepage,pullpage]))
  objectid=sql("select urban_object_id from ouf_udp.urban_object where canonical_type='https://example.org/R2bFile'")
  lineage=http('http://127.0.0.1:18132/api/udp/v1/objects/'+objectid+'/lineage',human)
  check('human_can_verify_lineage',bool(lineage) and 'contractRefs' in json.dumps(lineage))

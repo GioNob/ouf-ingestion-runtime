@@ -15,8 +15,8 @@ jobs:
     env:
       ONBOARDING_ROOT: ${{ github.workspace }}/.pairwise/onboarding
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
-      R2B_PUBLISHER_SHA: 82fd4f55f5896a22159905a06f36c7b76f4fed6b
-      R2B_UDP_SHA: b0f0be28caa833d9a21371b324f8567f4e6424ae
+      R2B_PUBLISHER_SHA: ea2cc48d42a3df8412ec124e997c2b4b3bf55a1d
+      R2B_UDP_SHA: b66c8a3e9ac0c342391a51d38caf9222d8115478
       PGPASSWORD: ci-only-password
       AWS_ACCESS_KEY_ID: minio-ci-access
       AWS_SECRET_ACCESS_KEY: minio-ci-secret
@@ -26,12 +26,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: 82fd4f55f5896a22159905a06f36c7b76f4fed6b
+          ref: ea2cc48d42a3df8412ec124e997c2b4b3bf55a1d
           path: .pairwise/onboarding
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-udp-object-resolution
-          ref: b0f0be28caa833d9a21371b324f8567f4e6424ae
+          ref: b66c8a3e9ac0c342391a51d38caf9222d8115478
           path: .pairwise/udp
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
