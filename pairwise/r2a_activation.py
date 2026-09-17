@@ -22,7 +22,7 @@ def wait(predicate,seconds=90):
   if any(p.poll() is not None for p in processes):raise RuntimeError('Application process exited; inspect logs')
   try:
    if predicate():return
-  except (OSError,ValueError):pass
+  except (OSError,ValueError,subprocess.CalledProcessError):pass
   time.sleep(.5)
  raise TimeoutError('Bounded process integration wait expired')
 def launch(name,args,env):
