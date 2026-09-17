@@ -25,6 +25,9 @@ class AutomaticActivationRuntimeTest {
   }finally{exchange.close();}});SERVER.start();}catch(Exception e){throw new ExceptionInInitializerError(e);}}
  @DynamicPropertySource static void properties(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));r.add("ouf.ingestion.activation.enabled",()->"true");r.add("ouf.ingestion.activation.gateway-url",()->"http://127.0.0.1:"+SERVER.getAddress().getPort());r.add("ouf.ingestion.activation.token-file",()->TOKEN.toString());r.add("ouf.ingestion.activation.tenant-id",()->"tenant-a");r.add("ouf.ingestion.activation.poll-ms",()->"250");}
  @Autowired JdbcClient db;
+ @BeforeEach void isolateAdmission(){db.sql("update ouf_ingestion.runtime_pressure_policy set global_running_limit=128,state='NORMAL',soft_outbox_limit=1000,hard_outbox_limit=5000,recovery_outbox_limit=500 where policy_key='GLOBAL'").update();}
+ @AfterEach void disableFixtureSchedules(){FILE.put("sourceStatus","DISABLED");PULL.put("sourceStatus","DISABLED");db.sql("update ouf_ingestion.ing_schedule set state='DISABLED' where source_id in ('r2-file','r2-pull')").update();}
+
  @AfterAll static void close()throws Exception{SERVER.stop(0);Files.deleteIfExists(TOKEN);}
  @Test void scheduledBeanStartsFileAndPullWithoutCallingCoordinator()throws Exception{
   long deadline=System.nanoTime()+Duration.ofSeconds(25).toNanos();while(System.nanoTime()<deadline&&count()<2)Thread.sleep(100);assertThat(count()).isEqualTo(2);
