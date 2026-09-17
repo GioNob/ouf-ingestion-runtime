@@ -9,7 +9,7 @@ public interface AdapterSpi {
   RecordCursor open(ExecutionBundle bundle,Checkpoint checkpoint);
   record Compatibility(String current,String oldestReadableBundleVersion){}
   record Checkpoint(Map<String,Object> value){public Checkpoint{value=Map.copyOf(value);}}
-  record SourceRecord(String sourceObjectId,long ordinal,Map<String,Object> payload,Map<String,Object> provenance){public SourceRecord{payload=Map.copyOf(payload);provenance=Map.copyOf(provenance);}}
+  record SourceRecord(String sourceObjectId,long ordinal,Map<String,Object> payload,Map<String,Object> provenance){public SourceRecord{payload=Collections.unmodifiableMap(new LinkedHashMap<>(payload));provenance=Map.copyOf(provenance);}}
   interface RecordCursor extends AutoCloseable {Optional<SourceRecord> next();Checkpoint checkpoint();@Override void close();}
 
   enum ErrorClass { TRANSIENT_SOURCE, AUTH_ROUTE, CONFIGURATION, DATA, PROGRAMMING }
