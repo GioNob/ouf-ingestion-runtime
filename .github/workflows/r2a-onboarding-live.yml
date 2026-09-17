@@ -33,6 +33,11 @@ jobs:
           if jar tf .pairwise/onboarding/target/source-onboarding-*.jar | grep -q ActivationPublisherFixture; then exit 1; fi
       - name: Automatic activation and restart without manual coordinator calls
         run: timeout --signal=TERM --kill-after=15s 5m python3 pairwise/r2a_activation.py
+      - name: Print bounded diagnostic evidence
+        if: always()
+        run: |
+          if test -f target/r2a-evidence/summary.json; then cat target/r2a-evidence/summary.json; fi
+          for log in target/r2a-evidence/*.log; do if test -f "$log"; then tail -n 60 "$log"; fi; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
