@@ -20,9 +20,11 @@ public final class ManagedAccessAdapter implements AdapterSpi {
     if(!projection.containsAll(keys)||keys.contains("$managedRowOrdinal"))throw failure("IDENTITY_INVALID");
     byte[] bytes=objects.read(bundle.bindingRef(),size,expected);
     if(bytes.length!=size||!expected.equals("sha256:"+hash(bytes)))throw failure("INTEGRITY_MISMATCH");
+    long maxRows=integer(config,"maxRows",1,10000),maxCellChars=integer(config,"maxCellChars",1,65536);
     var records=new ArrayList<SourceRecord>();var identities=new HashSet<String>();
     try(var reader=new AccessReader(bytes)){
       for(var row:reader.rows(table,projection)){
+        if(records.size()>=maxRows||row.values().stream().anyMatch(v->v instanceof String text&&text.length()>maxCellChars))throw failure("APPROVED_LIMIT_EXCEEDED");
         StringBuilder material=new StringBuilder("ACCESS1");append(material,bundle.sourceId());append(material,table);
         for(String key:keys){Object value=row.get(key);if(value==null||String.valueOf(value).isBlank())throw failure("IDENTITY_MISSING");append(material,key);append(material,String.valueOf(value));}
         String id="managed-access:"+hash(material.toString().getBytes(StandardCharsets.UTF_8));

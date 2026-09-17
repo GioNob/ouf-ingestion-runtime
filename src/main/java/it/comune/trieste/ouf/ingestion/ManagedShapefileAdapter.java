@@ -18,12 +18,14 @@ public final class ManagedShapefileAdapter implements AdapterSpi {
     var keys=raw.stream().map(String.class::cast).toList();
     byte[] bytes=objects.read(bundle.bindingRef(),size,hash);
     try{if(bytes.length!=size||!hash.equals("sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))))throw failure("INTEGRITY_MISMATCH");}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}
+    long maxRows=integer(c,"maxRows",1,10000),maxCellChars=integer(c,"maxCellChars",1,65536);
     var records=new ArrayList<SourceRecord>();var identities=new HashSet<String>();
     try(var reader=new ShapefileReader(bytes)){
       var layer=reader.layers().stream().filter(l->l.name().equals(layerName)).findFirst().orElseThrow(()->failure("LAYER_MISSING"));
       if(!layer.crs().equals(text(c,"sourceCrs"))||!layer.encoding().equals(text(c,"encoding"))||!layer.geometryColumn().equals(text(c,"geometryColumn")))throw failure("PROFILE_MISMATCH");
       if(keys.contains(layer.geometryColumn())||!layer.columns().containsAll(keys))throw failure("IDENTITY_INVALID");
       for(var row:layer.rows()){
+        if(records.size()>=maxRows||row.values().stream().anyMatch(v->v instanceof String text&&text.length()>maxCellChars))throw failure("APPROVED_LIMIT_EXCEEDED");
         String id=ManagedGeoPackageAdapter.identity(bundle.sourceId(),layerName,row,keys).replace("managed-gpkg:","managed-shp:");
         if(!identities.add(id))throw failure("DUPLICATE_IDENTITY");
         records.add(new SourceRecord(id,records.size()+1,row,Map.of("managedObjectRef",bundle.bindingRef(),"contentHash",hash,"layer",layerName,"sourceCrs",layer.crs(),"encoding",layer.encoding(),"readerVersion","geotools-35.0")));

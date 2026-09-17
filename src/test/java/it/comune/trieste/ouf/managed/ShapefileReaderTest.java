@@ -8,7 +8,7 @@ import java.util.zip.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class ShapefileReaderTest {
+public class ShapefileReaderTest {
   @Test void readsPointAndPreservesDbfIdentifier() throws Exception {
     var files=fixture();
     try(var reader=new ShapefileReader(zip(files))){
@@ -37,7 +37,7 @@ class ShapefileReaderTest {
     var files=fixture();ByteBuffer.wrap(files.get("assets.shx")).putInt(100,60);
     assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(files)));
   }
-  static Map<String,byte[]> fixture(){
+  public static Map<String,byte[]> fixture(){
     var shp=ByteBuffer.allocate(128);header(shp,1);shp.order(ByteOrder.BIG_ENDIAN).position(100);shp.putInt(1).putInt(10);shp.order(ByteOrder.LITTLE_ENDIAN).putInt(1).putDouble(13.77).putDouble(45.65);
     var shx=ByteBuffer.allocate(108);header(shx,1);shx.order(ByteOrder.BIG_ENDIAN).position(100);shx.putInt(50).putInt(10);
     var dbf=ByteBuffer.allocate(70).order(ByteOrder.LITTLE_ENDIAN);dbf.put(0,(byte)3);dbf.putInt(4,1);dbf.putShort(8,(short)65);dbf.putShort(10,(short)4);dbf.position(32);dbf.put("CODE".getBytes(StandardCharsets.US_ASCII));dbf.put(43,(byte)'C');dbf.put(48,(byte)3);dbf.put(64,(byte)13);dbf.position(65);dbf.put((byte)' ').put("001".getBytes(StandardCharsets.US_ASCII)).put((byte)26);
@@ -45,5 +45,5 @@ class ShapefileReaderTest {
     var files=new LinkedHashMap<String,byte[]>();files.put("assets.shp",shp.array());files.put("assets.shx",shx.array());files.put("assets.dbf",dbf.array());files.put("assets.prj",wkt.getBytes(StandardCharsets.UTF_8));files.put("assets.cpg","UTF-8".getBytes(StandardCharsets.US_ASCII));return files;
   }
   private static void header(ByteBuffer b,int type){b.order(ByteOrder.BIG_ENDIAN).putInt(0,9994).putInt(24,b.capacity()/2);b.order(ByteOrder.LITTLE_ENDIAN).putInt(28,1000).putInt(32,type);b.putDouble(36,13.77).putDouble(44,45.65).putDouble(52,13.77).putDouble(60,45.65);}
-  static byte[] zip(Map<String,byte[]> files)throws IOException{var bytes=new ByteArrayOutputStream();try(var zip=new ZipOutputStream(bytes)){for(var e:files.entrySet()){zip.putNextEntry(new ZipEntry(e.getKey()));zip.write(e.getValue());zip.closeEntry();}}return bytes.toByteArray();}
+  public static byte[] zip(Map<String,byte[]> files)throws IOException{var bytes=new ByteArrayOutputStream();try(var zip=new ZipOutputStream(bytes)){for(var e:files.entrySet()){zip.putNextEntry(new ZipEntry(e.getKey()));zip.write(e.getValue());zip.closeEntry();}}return bytes.toByteArray();}
 }
