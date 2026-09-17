@@ -18,7 +18,7 @@ jobs:
       R2C_SEMANTIC_SHA: cfef6777ff14c218182c06682c6663840437d3d2
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
       R2B_PUBLISHER_SHA: 808b717ed4bddeb7e6b22ec42dfb32095464ed2c
-      R2B_UDP_SHA: e378a0a3b693a7e3a102995b8067c34134abb6db
+      R2B_UDP_SHA: 85f9b0c8aa857016ff2a8d4886b28bc23876cf74
       OUF_R2E_INPUT: ${{ github.workspace }}/src/test/resources/geopackage/cameras.gpkg
       OUF_R2E_INPUT_RELOADED: ${{ github.workspace }}/src/test/resources/geopackage/cameras-reloaded.gpkg
       PGPASSWORD: ci-only-password
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-udp-object-resolution
-          ref: e378a0a3b693a7e3a102995b8067c34134abb6db
+          ref: 85f9b0c8aa857016ff2a8d4886b28bc23876cf74
           path: .pairwise/udp
       - uses: actions/checkout@v4
         with:
