@@ -28,8 +28,10 @@ def launch(name,args,env):
  f=open(evidence/(name+'.log'),'w');logs.append(f);p=subprocess.Popen(args,cwd=root,env=env,stdout=f,stderr=subprocess.STDOUT);processes.append(p);return p
 class Gateway(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
- def reply(self,status,body):
-  self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+ def reply(self,status,body,cookie=None):
+  self.send_response(status);
+  if cookie:self.send_header('Set-Cookie',cookie)
+  self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):self.route()
  def do_POST(self):self.route()
  def route(self):
@@ -44,7 +46,7 @@ class Gateway(BaseHTTPRequestHandler):
    elif path.path=='/api/semantic/v1/references:resolve':
     calls['semantic']+=1;upstream='http://127.0.0.1:18135'+self.path
    elif path.path=='/internal/object-storage/v1/content':
-    refs={'object://r2f/'+name:str(pathlib.Path(os.environ['OUF_R2F_INPUT_DIR'])/name) for name in ('assets.zip','assets.mdb','assets.accdb')}
+    refs={'object://r2f/'+name:str(pathlib.Path(os.environ['OUF_R2F_INPUT_DIR'])/name) for name in ('assets.zip','assets.mdb','assets.accdb','assets.gpkg')}
     ref=parse_qs(path.query).get('ref',[''])[0]
     if auth!='Bearer '+token or ref not in refs:self.send_error(403);return
     self.reply(200,pathlib.Path(refs[ref]).read_bytes());return
@@ -52,19 +54,22 @@ class Gateway(BaseHTTPRequestHandler):
     if auth!='Bearer '+token or json.loads(data)['bindingRef']!='gateway://r2b/pull':self.send_error(403);return
     self.reply(200,json.dumps({'items':[{'id':'2','name':'Beta','secret':'classified-pull'}]}).encode());return
    else:self.send_error(404);return
-   request=urllib.request.Request(upstream,data=data,method=self.command,headers={'Authorization':auth,'Content-Type':'application/json'})
-   with urllib.request.urlopen(request,timeout=15) as r:body=r.read(2_097_153);status=r.status
+   headers={'Authorization':auth,'Content-Type':'application/json'}
+   for key in ('Cookie','X-OUF-CSRF','Origin'):
+    if self.headers.get(key):headers[key]=self.headers[key]
+   request=urllib.request.Request(upstream,data=data,method=self.command,headers=headers)
+   with urllib.request.urlopen(request,timeout=15) as r:body=r.read(2_097_153);status=r.status;cookie=r.headers.get('Set-Cookie')
    if path.path=='/api/internal/v1/handoffs' and self.command=='POST':
     calls['handoff']+=1;calls['duplicateAck']+=int(json.loads(body).get('duplicate',False))
     if not ack_allowed:status=202;calls['nondurableResponse']+=1
-   self.reply(status,body)
+   self.reply(status,body,cookie)
   except urllib.error.HTTPError as error:self.reply(error.code,error.read(65536))
 server=ThreadingHTTPServer(('127.0.0.1',18132),Gateway);threading.Thread(target=server.serve_forever,daemon=True).start()
 try:
  env=dict(os.environ,OUF_PAIRWISE_TOKEN=token,OUF_PAIRWISE_HUMAN_TOKEN=human,OUF_ONB_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_ONB_DB_USER='ouf',OUF_ONB_DB_PASSWORD=os.environ['PGPASSWORD'],OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_UDP_DB_USER='ouf',OUF_UDP_DB_PASSWORD=os.environ['PGPASSWORD'],SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE='3',SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE='0')
  def classpath(path):return str(path/'target/test-classes')+':'+str(path/'target/classes')+':'+(path/'target/r2-classpath.txt').read_text().strip()
- from r2f_fixtures import shapefile
- shapefile(os.environ['OUF_R2F_INPUT_DIR'])
+ from r2f_fixtures import shapefile,geopackage
+ shapefile(os.environ['OUF_R2F_INPUT_DIR']);geopackage(os.environ['OUF_R2F_INPUT_DIR'])
  subprocess.run(['java','-cp',classpath(onboarding),'it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture',os.environ['OUF_R2F_INPUT_DIR']],check=True,timeout=60)
  env.update(OUF_SEM_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_SEM_DB_USER='ouf',OUF_SEM_DB_PASSWORD=os.environ['PGPASSWORD'],OUF_DISCOVERY_WORKER_ENABLED='false',OUF_R2C_SEMANTIC_RESULT=str(evidence/'semantic-publication.json'))
  launch('semantic',['java','-cp',classpath(semantic),'it.comune.trieste.ouf.pairwise.GovernedPublicationFixture','--server.port=18135'],env)
@@ -75,7 +80,7 @@ try:
  check('real_registry_reference_active',http(exact)['status']=='ACTIVE')
  launch('onboarding',['java','-cp',classpath(onboarding),'it.comune.trieste.ouf.pairwise.ServingPublisherFixture','--server.port=18131','--ouf.runtime-publications.tenant-id=tenant-a'],env)
  wait(lambda:len(http('http://127.0.0.1:18131/api/onboarding/v1/runtime/publications')['items'])==1)
- udp_args=['java','-cp',classpath(udp),'it.comune.trieste.ouf.pairwise.ServingConsumerFixture','--server.port=18134','--ouf.udp.execution.enabled=true','--ouf.udp.execution.gateway-url=http://127.0.0.1:18132','--ouf.udp.execution.token-file='+str(tokenfile),'--ouf.udp.lake.tenant-id=tenant-a','--ouf.udp.lake.required=true','--ouf.udp.lake.raw-retention-days=30','--ouf.udp.lake.raw-retention-class=OPERATIONAL','--ouf.udp.lake.raw-access-label=RESTRICTED','--ouf.udp.lake.s3.bucket=r2b-lake','--ouf.udp.lake.s3.endpoint=http://127.0.0.1:9000','--ouf.udp.lake.s3.path-style=true']
+ udp_args=['java','-cp',classpath(udp),'it.comune.trieste.ouf.pairwise.ServingConsumerFixture','--server.port=18134','--ouf.ths.origin=https://fixture.ouf.test','--ouf.udp.execution.enabled=true','--ouf.udp.execution.gateway-url=http://127.0.0.1:18132','--ouf.udp.execution.token-file='+str(tokenfile),'--ouf.udp.lake.tenant-id=tenant-a','--ouf.udp.lake.required=true','--ouf.udp.lake.raw-retention-days=30','--ouf.udp.lake.raw-retention-class=OPERATIONAL','--ouf.udp.lake.raw-access-label=RESTRICTED','--ouf.udp.lake.s3.bucket=r2b-lake','--ouf.udp.lake.s3.endpoint=http://127.0.0.1:9000','--ouf.udp.lake.s3.path-style=true']
  consumer=launch('udp',udp_args,env);wait(lambda:http('http://127.0.0.1:18134/actuator/health')['status']=='UP')
  env.update(OUF_ING_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_ING_DB_USER='ouf',OUF_ING_DB_PASSWORD=os.environ['PGPASSWORD'])
  args=['java','-jar',str(next((root/'target').glob('ingestion-runtime-*.jar'))),'--server.port=18133','--ouf.ingestion.activation.enabled=true','--ouf.ingestion.execution.enabled=true','--ouf.ingestion.activation.gateway-url=http://127.0.0.1:18132','--ouf.ingestion.activation.token-file='+str(tokenfile),'--ouf.ingestion.activation.tenant-id=tenant-a','--ouf.ingestion.activation.poll-ms=500']
@@ -127,8 +132,43 @@ try:
   try:http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,credential);raise AssertionError(name+' reads object')
   except urllib.error.HTTPError as e:check(name+'_serving_denied',e.code==403)
  check('raw_file_records_are_verified',sql("select count(*) from ouf_udp.handoff_intake h join ouf_udp.lake_object l on l.lake_object_id=h.source_raw_lake_object_id where l.state='VERIFIED'")=='6')
+ # Reuse the real Registry's published relation through the Access proposal lifecycle.
+ check('access_relationship_proposals_resolved_to_published_semantics',sql("select count(*) from ouf_onboarding.semantic_gap g join ouf_onboarding.semantic_candidate c on c.candidate_id=g.selected_candidate_id where g.source_id in ('r2f-assets','r2f-children') and g.state='RESOLVED' and c.status='PUBLISHED' and c.evidence->>'direction'='REFERENCING_TO_REFERENCED' and c.evidence->'binding'->>'publicationSetId' is not null")=='2')
+ post('gpkg')
+ wait(lambda:sql("select count(*) from ouf_udp.materialization_observation m join ouf_udp.handoff_intake h on h.handoff_id=m.handoff_id where h.source_id='r2f-gpkg'")=='1',180)
+ equivalent=http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,human)
+ check('geopackage_and_shapefile_reuse_canonical_identity',sql("select urban_object_id from ouf_udp.source_binding where source_id='r2f-gpkg'")==asset)
+ check('equivalent_formats_preserve_geometry_and_attributes',equivalent['canonicalGeometry']==before['canonicalGeometry'] and equivalent['properties']==before['properties'])
+ check('equivalent_formats_preserve_existing_relationships',sql("select count(*) from ouf_udp.urban_relationship where status='ACTIVE'")=='2')
+ # A new approved authority policy deliberately leaves NAME tied; exercise the real HTTP owner API.
+ post('conflicts')
+ wait(lambda:sql("select count(*) from ouf_udp.property_conflict where property_iri='https://example.org/NAME' and state='OPEN'")=='1',180)
+ conflict=sql("select conflict_id from ouf_udp.property_conflict where property_iri='https://example.org/NAME' and state='OPEN'")
+ url='http://127.0.0.1:18132/api/udp/v1/governance/properties/conflicts/'+conflict
+ request=urllib.request.Request(url,headers={'Authorization':'Bearer '+human})
+ with urllib.request.urlopen(request,timeout=10) as response:
+  review=json.load(response);cookie=response.headers['Set-Cookie'].split(';',1)[0]
+ chosen=next(c['contributionId'] for c in review['candidates'] if c['sourceId']=='r2f-assets')
+ payload={'expectedCurrentRevision':review['currentRevision'],'chosenContribution':chosen,'reason':'Verified Access contribution in integration fixture'}
+ def decide(body,csrf=True,origin='https://fixture.ouf.test'):
+  headers={'Authorization':'Bearer '+human,'Content-Type':'application/json','Cookie':cookie,'Origin':origin}
+  if csrf:headers['X-OUF-CSRF']=review['csrfToken']
+  request=urllib.request.Request(url+'/decisions',data=json.dumps(body).encode(),headers=headers,method='POST')
+  with urllib.request.urlopen(request,timeout=10) as response:return json.load(response)
+ for name,body,csrf,origin,expected in [('missing_csrf',payload,False,'https://fixture.ouf.test',403),('cross_origin',payload,True,'https://other.test',403),('stale_revision',dict(payload,expectedCurrentRevision='00000000-0000-0000-0000-000000000000'),True,'https://fixture.ouf.test',409)]:
+  try:decide(body,csrf,origin);raise AssertionError(name+' accepted')
+  except urllib.error.HTTPError as error:check('human_property_'+name+'_denied',error.code==expected)
+ decision=decide(payload)
+ check('human_property_retry_returns_same_decision',decide(payload)==decision)
+ current=http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,human)
+ check('human_property_choice_updates_only_selected_property',current['properties']['https://example.org/NAME']=='Asset Romo' and current['properties']['https://example.org/CODE']=='001' and current['canonicalGeometry']==before['canonicalGeometry'])
+ check('human_property_decision_persisted_once',sql("select count(*) from ouf_udp.human_property_decision")=='1')
+ consumer.terminate();consumer.wait(timeout=20);processes.remove(consumer)
+ consumer=launch('udp-restarted',udp_args,env);wait(lambda:http('http://127.0.0.1:18134/actuator/health')['status']=='UP')
+ restored=http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,human)
+ check('human_property_choice_survives_owner_restart',restored['properties']==current['properties'] and restored['revisionId']==current['revisionId'])
  (evidence/'human-scenario.json').write_text(json.dumps({'assetBefore':before,'assetAfter':after,'relation':relation,'lineage':lineage,'schemaEvidence':published['schemaEvidence']},indent=2))
- (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_IDENTITY_FIXTURES','limitations':['Source data and human approvals use declared test fixtures','Semantic relationship selection is explicit in the fixture; automatic suggestion-to-Registry workflow is not certified','Geometry/property conflict UI, geometry roles/validity, production IAM and APISIX remain open']},indent=2))
+ (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_IDENTITY_FIXTURES','limitations':['Source data and human approvals use declared test fixtures','Registry publication and relation direction are explicitly selected by test actors; production IAM and APISIX remain separate acceptance gates','Geometry roles/validity and the browser use dedicated owner/browser suites; the live cross-owner human decision here covers scalar properties','Secure session cookie is explicitly forwarded by the HTTP test client; this is not production TLS/session acceptance']},indent=2))
 
 finally:
  diagnostics={}

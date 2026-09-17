@@ -24,3 +24,23 @@ def shapefile(directory):
         for ext,content in [('shp',shp),('shx',shx),('dbf',dbf),('prj',wkt.encode()),('cpg',b'UTF-8')]:
             info=zipfile.ZipInfo('assets.'+ext,date_time=(2026,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
             z.writestr(info,content)
+
+def geopackage(directory):
+    """Same mapped attributes and point as the Shapefile, with an excluded physical row id."""
+    import sqlite3
+    target=pathlib.Path(directory)/'assets.gpkg'
+    target.unlink(missing_ok=True)
+    with sqlite3.connect(target) as db:
+        db.executescript('''
+        PRAGMA application_id=1196444487;
+        PRAGMA user_version=10300;
+        CREATE TABLE gpkg_spatial_ref_sys(srs_name TEXT NOT NULL,srs_id INTEGER PRIMARY KEY,organization TEXT NOT NULL,organization_coordsys_id INTEGER NOT NULL,definition TEXT NOT NULL,description TEXT);
+        INSERT INTO gpkg_spatial_ref_sys VALUES('WGS 84',4326,'EPSG',4326,'EPSG:4326','Fixture');
+        CREATE TABLE gpkg_contents(table_name TEXT PRIMARY KEY,data_type TEXT NOT NULL,identifier TEXT,description TEXT DEFAULT '',last_change DATETIME,min_x DOUBLE,min_y DOUBLE,max_x DOUBLE,max_y DOUBLE,srs_id INTEGER);
+        INSERT INTO gpkg_contents VALUES('assets','features','assets','Equivalent Shapefile dataset','2026-09-17T00:00:00Z',13.77,45.65,13.77,45.65,4326);
+        CREATE TABLE gpkg_geometry_columns(table_name TEXT NOT NULL,column_name TEXT NOT NULL,geometry_type_name TEXT NOT NULL,srs_id INTEGER NOT NULL,z INTEGER NOT NULL,m INTEGER NOT NULL,PRIMARY KEY(table_name,column_name));
+        INSERT INTO gpkg_geometry_columns VALUES('assets','geom','POINT',4326,0,0);
+        CREATE TABLE assets(fid INTEGER PRIMARY KEY,ID TEXT,CODE TEXT,NAME TEXT,DISTRICT TEXT,geom BLOB);
+        ''')
+        geometry=b'GP'+bytes([0,1])+struct.pack('<i',4326)+struct.pack('<bIdd',1,1,13.77,45.65)
+        db.execute('INSERT INTO assets VALUES(1,?,?,?,?,?)',('S-001','001','Asset Roma','Centro',geometry))
