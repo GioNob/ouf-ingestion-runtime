@@ -5,8 +5,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.slf4j.*;
 import org.springframework.stereotype.Service;
 
-@Service
-@ConditionalOnBean(RuntimePorts.DurableHandoffPort.class)
 public class OutboxDispatcher {
   private static final Logger LOG=LoggerFactory.getLogger(OutboxDispatcher.class);
   private final DurablePipelineRepository repository; private final RuntimePorts.DurableHandoffPort downstream;private final IngestionMetrics metrics;

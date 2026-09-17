@@ -24,7 +24,7 @@ public final class ManagedTabularAdapter implements AdapterSpi {
     if(bytes.length!=expectedSize) throw error("ING_MANAGED_SIZE_MISMATCH",ErrorClass.DATA);
     Limits limits=new Limits((int)number(c,"maxRows",1,1_000_000),(int)number(c,"maxColumns",1,10_000),(int)number(c,"maxCellChars",1,1_000_000));
     List<String> keys=strings(c.get("identityFields"));
-    long resume=checkpoint==null?0:number(checkpoint.value(),"ordinal",0,Integer.MAX_VALUE);
+    long resume=checkpoint==null||checkpoint.value().isEmpty()?0:number(checkpoint.value(),"ordinal",0,Integer.MAX_VALUE);
     List<SourceRecord> rows=switch(bundle.acquisitionMode()){
       case "INTERNAL_MANAGED_CSV" -> csv(bundle,bytes,keys,limits);
       case "INTERNAL_MANAGED_XLSX" -> xlsx(bundle,bytes,keys,limits,required(c,"sheet"));
