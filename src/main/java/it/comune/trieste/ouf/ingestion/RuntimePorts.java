@@ -3,6 +3,7 @@ import java.time.Duration;
 import java.util.*;
 public final class RuntimePorts {private RuntimePorts(){}
   public interface ActiveBundlePort {ExecutionBundle loadAndVerify(String sourceId);default ExecutionBundle loadAndVerify(RunStateRepository.ScheduleClaim claim){return loadAndVerify(claim.sourceId());}}
+  public interface HistoricalBundlePort {ExecutionBundle loadHistoricalAndVerify(String sourceId,String bundleRef);}
   public interface AdapterResolver {AdapterSpi resolve(ExecutionBundle bundle);}
   public interface OnboardingReviewPort {Receipt request(UUID issueId,String sourceId,String evidenceRef,String correlationId,String idempotencyKey);record Receipt(String reviewRef,boolean durable){} }
   public interface GatewaySourcePort {byte[] fetch(String governedBindingRef,Map<String,Object> request,String correlationId);}
