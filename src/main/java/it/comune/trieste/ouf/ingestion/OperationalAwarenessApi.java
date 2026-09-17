@@ -20,20 +20,22 @@ public class OperationalAwarenessApi {
   private static int limit(Query q){return q==null||q.limit()==null?50:q.limit();}
 
   @PostMapping("/status")
-  Map<String,Object> status(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.status(q==null?null:q.sourceId(),limit(q),actor),"partial",false);}
+  Map<String,Object> status(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"ingestion.operations.read");return service.envelope("ingestion.operations.read",service.status(q==null?null:q.sourceId(),limit(q),actor),actor);}
 
   @PostMapping("/history")
-  Map<String,Object> history(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"ingestion.operations.read",false);return Map.of("items",service.history(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),"partial",false);}
+  Map<String,Object> history(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"ingestion.operations.read");return service.envelope("ingestion.operations.read",service.history(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),actor);}
 
   @PostMapping("/incidents")
-  Map<String,Object> incidents(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"operations.incident.read",false);return Map.of("items",service.incidents(q==null?null:q.state(),q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),"partial",false);}
+  Map<String,Object> incidents(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"operations.incident.read");return service.envelope("operations.incident.read",service.incidents(q==null?null:q.state(),q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),actor);}
 
   @PostMapping("/incidents/explain")
   Map<String,Object> explain(@RequestBody ExplainQuery q,HttpServletRequest request){
     if(q==null||q.incidentId()==null)throw new IllegalArgumentException("ING_OPERATIONAL_INCIDENT_ID_REQUIRED");
-    return issues.explain(q.incidentId(),authorization.require(request,"operations.incident.explain",false));
+    var actor=authorization.owner(request,"operations.incident.explain");var row=issues.get(q.incidentId(),actor);
+    service.requireVisible("operations.incident.explain",row,actor);
+    var result=issues.explain(q.incidentId(),actor);result.remove("evidenceRef");result.remove("quarantineId");return result;
   }
 
   @PostMapping("/summary")
-  Map<String,Object> summary(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.require(request,"operations.status.read",false);return service.summary(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor);}
+  Map<String,Object> summary(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"operations.status.read");return service.summary(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor);}
 }

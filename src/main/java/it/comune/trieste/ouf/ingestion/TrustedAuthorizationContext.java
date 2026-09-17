@@ -15,5 +15,11 @@ public class TrustedAuthorizationContext {
     catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
   }
   public Context require(HttpServletRequest request,String capability,boolean human){Context c=resolve(request);if(human&&!"HUMAN".equals(c.actorType()))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"ING_HUMAN_USER_REQUIRED");if(!c.capabilities().contains(capability))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"ING_CAPABILITY_REQUIRED");return c;}
-  public record Context(String subject,String actorType,String tenantId,Set<String> capabilities,String decisionRef){}
+  public Context owner(HttpServletRequest request,String capability){
+    try{var owner=it.comune.trieste.ouf.authorization.OwnerAuthorization.bind(request);if(!owner.candidates().contains(capability))throw new SecurityException("ING_CAPABILITY_REQUIRED");return new Context(owner.principal().subjectId(),owner.principal().actorType().name(),owner.principal().tenantId(),owner.candidates(),owner.decisionRef(),owner);}
+    catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
+  }
+  public record Context(String subject,String actorType,String tenantId,Set<String> capabilities,String decisionRef,it.comune.trieste.ouf.authorization.OwnerAuthorization owner){
+    public Context(String subject,String type,String tenant,Set<String> capabilities,String ref){this(subject,type,tenant,capabilities,ref,null);}
+  }
 }
