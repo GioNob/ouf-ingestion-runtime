@@ -11,8 +11,8 @@
     <spring-framework.version>6.2.19</spring-framework.version>
   </properties>
   <dependencies>
-    <dependency><groupId>it.comune.trieste.ouf</groupId><artifactId>authorization-sdk</artifactId><version>1.0.0</version></dependency>
-    <dependency><groupId>it.comune.trieste.ouf</groupId><artifactId>authorization-sdk</artifactId><version>1.0.0</version><type>test-jar</type><classifier>tests</classifier><scope>test</scope></dependency>
+    <dependency><groupId>it.comune.trieste.ouf</groupId><artifactId>authorization-sdk</artifactId><version>1.1.0</version></dependency>
+    <dependency><groupId>it.comune.trieste.ouf</groupId><artifactId>authorization-sdk</artifactId><version>1.1.0</version><type>test-jar</type><classifier>tests</classifier><scope>test</scope></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId><exclusions><exclusion><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-tomcat</artifactId></exclusion></exclusions></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jetty</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
