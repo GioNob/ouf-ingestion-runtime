@@ -19,6 +19,7 @@ public final class PublishedExecutionMapper {
     config.putAll(snapshot.configuration());
     config.put("typeCode",typeCode);
     config.put("propertyMappings",semantic.get("propertyMappings"));
+    config.put("dataAccessLabels",published.getOrDefault("dataAccessPolicies",List.of()));
     config.put("changeRepresentationProfile",published.get("changeRepresentationProfile"));
     var projection=PublishedActivation.map(extraction,"projection");
     config.put("expectedFieldNames",projection.get(typeCode));

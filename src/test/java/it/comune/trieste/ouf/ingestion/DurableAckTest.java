@@ -40,7 +40,7 @@ import org.springframework.test.context.*;
     sql.sql("update ouf_ingestion.ing_partition set lease_owner='old',lease_generation=1,lease_until=transaction_timestamp()-interval '1 second' where run_id=:r").param("r",run).update();
     var old=new RunExecutionRepository.Claim(run,"default",Map.of(),1,"old");
     assertThatThrownBy(()->repository.stage(fenced(run,old))).hasMessage("ING_PARTITION_LEASE_LOST");
-    assertThat(checkpoint(run)).isNull();
+    assertThat(sql.sql("select checkpoint_json='{}'::jsonb from ouf_ingestion.ing_partition where run_id=:r").param("r",run).query(Boolean.class).single()).isTrue();
     sql.sql("update ouf_ingestion.ing_partition set lease_owner='new',lease_generation=2,lease_until=transaction_timestamp()+interval '1 minute' where run_id=:r").param("r",run).update();
     assertThatThrownBy(()->repository.stage(fenced(run,old))).hasMessage("ING_PARTITION_LEASE_LOST");
     assertThat(sql.sql("select count(*) from ouf_ingestion.processing_attempt where run_id=:r").param("r",run).query(Long.class).single()).isZero();
