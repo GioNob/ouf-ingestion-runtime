@@ -46,7 +46,7 @@ class Gateway(BaseHTTPRequestHandler):
    elif path.path=='/api/semantic/v1/references:resolve':
     calls['semantic']+=1;upstream='http://127.0.0.1:18135'+self.path
    elif path.path=='/internal/object-storage/v1/content':
-    refs={'object://r2f/'+name:str(pathlib.Path(os.environ['OUF_R2F_INPUT_DIR'])/name) for name in ('assets.zip','assets.mdb','assets.accdb','assets.gpkg')}
+    refs={'object://r2f/'+name:str(pathlib.Path(os.environ['OUF_R2F_INPUT_DIR'])/name) for name in ('assets.zip','assets.mdb','assets.accdb','assets.gpkg','assets-shift.zip')}
     ref=parse_qs(path.query).get('ref',[''])[0]
     if auth!='Bearer '+token or ref not in refs:self.send_error(403);return
     self.reply(200,pathlib.Path(refs[ref]).read_bytes());return
@@ -69,7 +69,7 @@ try:
  env=dict(os.environ,OUF_PAIRWISE_TOKEN=token,OUF_PAIRWISE_HUMAN_TOKEN=human,OUF_ONB_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_ONB_DB_USER='ouf',OUF_ONB_DB_PASSWORD=os.environ['PGPASSWORD'],OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_UDP_DB_USER='ouf',OUF_UDP_DB_PASSWORD=os.environ['PGPASSWORD'],SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE='3',SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE='0')
  def classpath(path):return str(path/'target/test-classes')+':'+str(path/'target/classes')+':'+(path/'target/r2-classpath.txt').read_text().strip()
  from r2f_fixtures import shapefile,geopackage
- shapefile(os.environ['OUF_R2F_INPUT_DIR']);geopackage(os.environ['OUF_R2F_INPUT_DIR'])
+ shapefile(os.environ['OUF_R2F_INPUT_DIR']);shapefile(os.environ['OUF_R2F_INPUT_DIR'],'assets-shift.zip',13.7701);geopackage(os.environ['OUF_R2F_INPUT_DIR'])
  subprocess.run(['java','-cp',classpath(onboarding),'it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture',os.environ['OUF_R2F_INPUT_DIR']],check=True,timeout=60)
  env.update(OUF_SEM_DB_URL='jdbc:postgresql://127.0.0.1:5432/ouf',OUF_SEM_DB_USER='ouf',OUF_SEM_DB_PASSWORD=os.environ['PGPASSWORD'],OUF_DISCOVERY_WORKER_ENABLED='false',OUF_R2C_SEMANTIC_RESULT=str(evidence/'semantic-publication.json'))
  launch('semantic',['java','-cp',classpath(semantic),'it.comune.trieste.ouf.pairwise.GovernedPublicationFixture','--server.port=18135'],env)
@@ -167,8 +167,24 @@ try:
  consumer=launch('udp-restarted',udp_args,env);wait(lambda:http('http://127.0.0.1:18134/actuator/health')['status']=='UP')
  restored=http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,human)
  check('human_property_choice_survives_owner_restart',restored['properties']==current['properties'] and restored['revisionId']==current['revisionId'])
+ post('geometry')
+ wait(lambda:sql("select count(*) from ouf_udp.spatial_resolution_issue i join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where h.source_id='r2f-geometry' and i.state='OPEN' and i.reason_code='SPATIAL_AUTHORITY_CONFLICT'")=='1',180)
+ issue=sql("select issue_id from ouf_udp.spatial_resolution_issue i join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where h.source_id='r2f-geometry' and i.state='OPEN' and i.reason_code='SPATIAL_AUTHORITY_CONFLICT'")
+ url='http://127.0.0.1:18132/api/udp/v1/governance/geometry/issues/'+issue
+ with urllib.request.urlopen(urllib.request.Request(url,headers={'Authorization':'Bearer '+human}),timeout=10) as response:
+  review=json.load(response);cookie=response.headers['Set-Cookie'].split(';',1)[0]
+ check('geometry_review_has_authorized_comparison_metrics',review['metrics']['minimum_distance_meters']>0 and not review['metrics']['topologically_equal'])
+ payload={'expectedCurrentRevision':review['current']['revisionId'],'chosenRevision':review['candidate']['revisionId'],'reason':'Verified geometry candidate in integration fixture'}
+ geometry_decision=decide(payload)
+ check('geometry_human_decision_retry_is_idempotent',decide(payload)==geometry_decision)
+ wait(lambda:sql("select count(*) from ouf_udp.materialization_job j join ouf_udp.handoff_intake h on h.handoff_id=j.handoff_id where h.source_id='r2f-geometry' and j.state='SUCCEEDED'")=='1')
+ geometry_current=http('http://127.0.0.1:18132/api/udp/v1/objects/'+asset,human)
+ check('geometry_human_choice_aligns_current_and_canonical_property',geometry_current['geometry']==review['candidate']['geometry'] and geometry_current['properties']['https://example.org/geom']['geoJson']==geometry_current['geometry'])
+ check('geometry_choice_preserves_scalar_human_value',geometry_current['properties']['https://example.org/NAME']=='Asset Romo')
+ check('geometry_decision_persisted_once',sql("select count(*) from ouf_udp.human_geometry_decision")=='1')
+
  (evidence/'human-scenario.json').write_text(json.dumps({'assetBefore':before,'assetAfter':after,'relation':relation,'lineage':lineage,'schemaEvidence':published['schemaEvidence']},indent=2))
- (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_IDENTITY_FIXTURES','limitations':['Source data and human approvals use declared test fixtures','Registry publication and relation direction are explicitly selected by test actors; production IAM and APISIX remain separate acceptance gates','Geometry roles/validity and the browser use dedicated owner/browser suites; the live cross-owner human decision here covers scalar properties','Secure session cookie is explicitly forwarded by the HTTP test client; this is not production TLS/session acceptance']},indent=2))
+ (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_IDENTITY_FIXTURES','limitations':['Source data and human approvals use declared test fixtures','Registry publication and relation direction are explicitly selected by test actors; production IAM and APISIX remain separate acceptance gates','Geometry roles/validity and the browser use dedicated owner/browser suites; the live cross-owner human decisions cover scalar properties and geometry','Secure session cookie is explicitly forwarded by the HTTP test client; this is not production TLS/session acceptance']},indent=2))
 
 finally:
  diagnostics={}
