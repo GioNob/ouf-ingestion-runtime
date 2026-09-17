@@ -1,6 +1,6 @@
 # R1b consumer integration
 
-Canonical owner: GioNob/ouf-source-onboarding at eeffed582a8792b6116e15f01dc5e57f8b318298, SDK 1.1.0. Vendored sources and test vectors are byte-identical and checked in pairwise CI. Normative requirements: PET Authorization 1.5 §§109.2, 109.6, 36.10 and 34.2.
+Canonical owner: GioNob/ouf-source-onboarding at 8ac76d345df3b13b7b858ef1ba45ea22856e9d31, SDK 1.1.0. Vendored sources and test vectors are byte-identical and checked in pairwise CI. Normative requirements: PET Authorization 1.5 §§109.2, 109.6, 36.10 and 34.2.
 
 Grant constraints use authoritative resource type/id, module/source/job scope, DAL, permitted operational detail and trusted external role/ACR/AMR/authentication time. A missing required claim denies. Explicit DENY overrides ALLOW. Generic grants do not authorize sensitive labels or nonpublic detail. Existing domain-specific guards remain mandatory after coarse local authorization.
 
