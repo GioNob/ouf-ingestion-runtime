@@ -26,7 +26,7 @@ public final class CanonicalRecordPipeline {
       Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
       contracts.validate(ENVELOPE,envelope);byte[] normalized=bytes(envelope);String normalizedHash=hash(normalized);
       persist(RuntimePorts.DataLakePort.Zone.NORMALIZED,c,normalized,normalizedHash,"normalized");
-      Map<String,Object> candidate=Map.copyOf(mapped);Map<String,Object> curatedValue=metadata.operation()==Operation.UPSERT?candidate:tombstoneEvidence(c,metadata);
+      Map<String,Object> candidate=Collections.unmodifiableMap(new LinkedHashMap<>(mapped));Map<String,Object> curatedValue=metadata.operation()==Operation.UPSERT?candidate:tombstoneEvidence(c,metadata);
       byte[] curated=bytes(curatedValue);String outputHash=hash(curated);
       persist(RuntimePorts.DataLakePort.Zone.CURATED,c,curated,outputHash,"curated");
       Map<String,Object> refs=contractRefs(c.bundle(),cfg);

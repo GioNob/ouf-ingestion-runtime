@@ -9,6 +9,7 @@ import org.springframework.context.annotation.*;
 public class ExecutionRuntimeConfiguration {
   @Bean RuntimePorts.AdapterResolver executionAdapters(ExecutionGatewayClient gateway,ObjectMapper json){
     return bundle->switch(bundle.acquisitionMode()){
+      case "INTERNAL_MANAGED_GEOPACKAGE" -> new ManagedGeoPackageAdapter(gateway);
       case "INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX" -> new ManagedTabularAdapter(gateway);
       case "REST_JSON" -> new GatewayJsonAdapter(gateway,json);
       case "WFS" -> new GatewayWfsAdapter(gateway);
