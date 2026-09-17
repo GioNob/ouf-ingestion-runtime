@@ -77,7 +77,7 @@ public class RunStateRepository {
   String refreshPressure(){return sql.sql("select ouf_ingestion.refresh_pressure_state()").query(String.class).single();}
   private void transition(UUID run,String from,String to,String code){int n=sql.sql("update ouf_ingestion.ing_run set state=:t,failure_code=:c,updated_at=transaction_timestamp() where run_id=:r and state=:f").param("t",to).param("c",code).param("r",run).param("f",from).update();if(n!=1)throw new IllegalStateException("ING_RUN_TRANSITION_INVALID");}
   private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("ING_BUNDLE_SNAPSHOT_INVALID",e);}}
-  private static String phase(String acquisition){return switch(acquisition){case "MANAGED","INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX","INTERNAL_MANAGED_GEOPACKAGE"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
+  private static String phase(String acquisition){return switch(acquisition){case "MANAGED","INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX","INTERNAL_MANAGED_GEOPACKAGE","INTERNAL_MANAGED_ACCESS"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
   private static String mode(String phase){return switch(phase){case "MANAGED_ONCE"->"MANAGED_ONCE";case "REPLAY"->"REPLAY";default->"FULL_SNAPSHOT";};}
   private static String safe(String code){return code!=null&&code.matches("[A-Z0-9_]{1,80}")?code:"ING_INTERNAL_FAILURE";}
   public record ScheduleClaim(UUID scheduleId,String tenantId,String sourceId,int intervalSeconds,String worker,UUID publicationId,String publicationChecksum,OffsetDateTime dueAt,long generation){

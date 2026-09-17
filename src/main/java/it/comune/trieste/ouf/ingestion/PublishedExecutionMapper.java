@@ -34,7 +34,9 @@ public final class PublishedExecutionMapper {
     String mode=PublishedActivation.text(execution,"acquisitionMode");
     String binding=snapshot.bindingRef();
     if("MANAGED".equals(snapshot.acquisitionMode())){
-      if("INTERNAL_MANAGED_GEOPACKAGE".equals(mode)){
+      if("INTERNAL_MANAGED_ACCESS".equals(mode)){
+        if(!"managed-access-v1".equals(config.get("adapterId"))||keys.contains("$managedRowOrdinal")||!PublishedActivation.text(runtime,"layer").equals(config.get("layer")))throw invalid();
+      }else if("INTERNAL_MANAGED_GEOPACKAGE".equals(mode)){
         if(!"managed-geopackage-v1".equals(config.get("adapterId"))||keys.equals(List.of("$managedRowOrdinal")))throw invalid();
         for(String key:List.of("layer","sourceCrs","geometryColumn")){String approved=PublishedActivation.text(runtime,key);if(!approved.equals(config.get(key)))throw invalid();}
       }else if(!Set.of("INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX").contains(mode)||!"managed-tabular-v1".equals(config.get("adapterId")))throw invalid();
