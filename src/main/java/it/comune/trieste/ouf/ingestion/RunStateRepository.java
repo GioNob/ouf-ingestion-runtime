@@ -22,7 +22,7 @@ public class RunStateRepository {
     return claimed;
   }
   @Transactional public void releaseSchedule(ScheduleClaim c,boolean advance){
-    int changed=sql.sql("update ouf_ingestion.ing_schedule set next_run_at=case when :a then transaction_timestamp()+(interval_seconds*interval '1 second') else transaction_timestamp()+interval '60 seconds' end,state=case when :a and trigger_once then 'DISABLED' else state end,consumed_publication_id=case when :a then publication_id else consumed_publication_id end,lease_owner=null,lease_until=null,lock_version=lock_version+1 where schedule_id=:i and lease_owner=:w and lock_version=:g and lease_until>transaction_timestamp()")
+    int changed=sql.sql("update ouf_ingestion.ing_schedule set next_run_at=case when :a then transaction_timestamp()+(interval_seconds*interval '1 second') else transaction_timestamp()+interval '60 seconds' end,state=case when :a and trigger_once then 'DISABLED' else state end,consumed_publication_id=case when :a then publication_id else consumed_publication_id end,activation_failures=case when :a then 0 else activation_failures end,activation_first_failure_at=case when :a then null else activation_first_failure_at end,activation_blocked=case when :a then false else activation_blocked end,lease_owner=null,lease_until=null,lock_version=lock_version+1 where schedule_id=:i and lease_owner=:w and lock_version=:g and lease_until>transaction_timestamp()")
      .param("a",advance).param("i",c.scheduleId()).param("w",c.worker()).param("g",c.generation()).update();if(changed!=1)throw new IllegalStateException("ING_SCHEDULE_LEASE_LOST");
   }
   @Transactional public void completePreflight(ScheduleClaim c,UUID run){checkLease(c);preflightSucceeded(run);releaseSchedule(c,true);}
