@@ -54,7 +54,7 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
     try{
       String credential=Files.readString(token).strip();if(credential.isEmpty()||credential.length()>16384||credential.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
       var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(10)).header("Authorization","Bearer "+credential).header("X-Correlation-ID",UUID.randomUUID().toString());
-      if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));
+      if(body==null)builder.GET();else {byte[] encoded=json.writeValueAsBytes(body);if(encoded.length>10_485_760)throw new IllegalArgumentException("ING_EXECUTION_REQUEST_TOO_LARGE");builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(encoded));}
       var pending=http.sendAsync(builder.build(),info->new BoundedBody(limit));HttpResponse<byte[]> response;
       try{response=pending.get(12,TimeUnit.SECONDS);}catch(TimeoutException|ExecutionException e){pending.cancel(true);throw failure("ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
       if(response.statusCode()!=expected)throw failure("ING_EXECUTION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);

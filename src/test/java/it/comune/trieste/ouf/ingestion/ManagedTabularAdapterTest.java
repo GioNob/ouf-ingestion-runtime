@@ -20,6 +20,13 @@ class ManagedTabularAdapterTest {
     }
   }
 
+  @Test void newlyAdmittedRunStartsFromEmptyCheckpoint(){
+    byte[] bytes="id,name\nA,Alpha\n".getBytes(StandardCharsets.UTF_8);
+    try(var cursor=adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("identityFields",List.of("id"))),new AdapterSpi.Checkpoint(Map.of()))){
+      assertThat(cursor.next().orElseThrow().payload()).containsEntry("name","Alpha");assertThat(cursor.next()).isEmpty();
+    }
+  }
+
   @Test void keyedIdentitySurvivesRowReordering() throws Exception {
     byte[] one="id,name\nA,Alpha\nB,Beta\n".getBytes(StandardCharsets.UTF_8);
     byte[] two="id,name\nB,Beta\nA,Alpha\n".getBytes(StandardCharsets.UTF_8);
