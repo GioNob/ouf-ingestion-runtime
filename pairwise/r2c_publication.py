@@ -114,8 +114,29 @@ try:
  wait(lambda:http('http://127.0.0.1:18134/actuator/health')['status']=='UP')
  check('restart_preserves_serving','Alpha' in json.dumps(http('http://127.0.0.1:18132/api/udp/v1/objects/'+objectid,human)))
  check('restart_no_duplicate_revisions',sql('select count(*) from ouf_udp.object_revision')==before)
+ def post(url,body,credential=human):
+  request=urllib.request.Request(url,data=json.dumps(body).encode(),method='POST',headers={'Authorization':'Bearer '+credential,'Content-Type':'application/json'})
+  with urllib.request.urlopen(request,timeout=25) as response:return json.load(response)
+ old_handoff=sql("select handoff_id from ouf_udp.handoff_intake where source_id='r2b-pull' and payload_json#>>'{contractRefs,bundleRef}' like 'r2b-pull:1:%' limit 1")
+ replay_url='http://127.0.0.1:18132/api/udp/v1/governance/replays'
+ try:post(replay_url,{'sourceHandoffId':old_handoff,'reason':'R2c forbidden workload replay'},token);raise AssertionError('service planned human replay')
+ except urllib.error.HTTPError as e:check('workload_cannot_plan_human_replay',e.code==403)
+ plan=post(replay_url,{'sourceHandoffId':old_handoff,'reason':'R2c reproduce v1 while v2 is active'})
+ check('historical_reproduce_plan_ready',plan['state']=='READY' and plan['baselineRefs']['bundleRef']==old_ref)
+ execute_url=replay_url+'/'+plan['replayPlanId']+'/execute'
+ result=post(execute_url,{'expectedVersion':plan['version']})
+ check('historical_reproduce_durable',result['state']=='SUCCEEDED')
+ check('historical_reproduce_idempotent',post(execute_url,{'expectedVersion':plan['version']})==result)
+ replay_handoff=result['replayHandoffId']
+ assert replay_handoff.startswith('replay-') and all(c in 'replay-0123456789abcdef' for c in replay_handoff)
+ wait(lambda:sql("select state from ouf_udp.materialization_job where handoff_id='"+replay_handoff+"'")=='SUCCEEDED')
+ check('historical_reproduce_materialized_under_original_bundle',sql("select payload_json#>>'{contractRefs,bundleRef}' from ouf_udp.handoff_intake where handoff_id='"+replay_handoff+"'")==old_ref)
+ check('historical_reproduce_preserves_source_raw',sql("select count(*) from ouf_udp.handoff_intake where handoff_id='"+replay_handoff+"' and source_raw_lake_object_id is not null")=='1')
+ check('historical_reproduce_does_not_duplicate_objects',sql('select count(*) from ouf_udp.urban_object')=='2')
+ check('historical_reproduce_preserves_human_result','Beta' in json.dumps(http('http://127.0.0.1:18132/api/udp/v1/objects?type=https%3A%2F%2Fexample.org%2FR2bPull',human)))
+ (evidence/'historical-replay.json').write_text(json.dumps({'plan':plan,'execution':result},indent=2))
  (evidence/'human-scenario.json').write_text(json.dumps({'fileResult':filepage,'pullResult':pullpage,'fileLineage':lineage},indent=2))
- (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_UPSTREAM_IDENTITY_FIXTURES','limitations':['historical outbox delivery replay, not raw quarantine reprocessing','human decisions use test-only identity/bootstrap; browser and production IAM remain open']},indent=2))
+ (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'publisherCommit':os.environ['R2B_PUBLISHER_SHA'],'udpCommit':os.environ['R2B_UDP_SHA'],'runtimeCommit':os.environ.get('GITHUB_SHA'),'semanticCommit':os.environ['R2C_SEMANTIC_SHA'],'level':'FOUR_REAL_OWNER_JVM_PROCESSES_POSTGRES_MINIO_WITH_DECLARED_GATEWAY_UPSTREAM_IDENTITY_FIXTURES','limitations':['UDP historical handoff REPRODUCE and outbox replay verified; Ingestion raw quarantine reprocessing remains separate','human decisions use test-only identity/bootstrap; browser and production IAM remain open']},indent=2))
 finally:
  for p in reversed(processes):
   p.terminate()
