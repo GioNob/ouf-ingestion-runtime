@@ -17,8 +17,8 @@ jobs:
       SEMANTIC_ROOT: ${{ github.workspace }}/.pairwise/semantic
       R2C_SEMANTIC_SHA: cfef6777ff14c218182c06682c6663840437d3d2
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
-      R2B_PUBLISHER_SHA: 08274b3c10111a0d238166235f7b1d9034795d91
-      R2B_UDP_SHA: a8bfa7f220dfa0df8ba1f0778f47f334ed2ffb5d
+      R2B_PUBLISHER_SHA: 4afc9f6d01cb2c945d348751f093eefbb5140980
+      R2B_UDP_SHA: ba715ca1b923c6d4a52db7fe436b2386047def29
       OUF_R2E_INPUT: ${{ github.workspace }}/src/test/resources/geopackage/cameras.gpkg
       OUF_R2E_INPUT_RELOADED: ${{ github.workspace }}/src/test/resources/geopackage/cameras-reloaded.gpkg
       PGPASSWORD: ci-only-password
@@ -30,12 +30,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: 08274b3c10111a0d238166235f7b1d9034795d91
+          ref: 4afc9f6d01cb2c945d348751f093eefbb5140980
           path: .pairwise/onboarding
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-udp-object-resolution
-          ref: a8bfa7f220dfa0df8ba1f0778f47f334ed2ffb5d
+          ref: ba715ca1b923c6d4a52db7fe436b2386047def29
           path: .pairwise/udp
       - uses: actions/checkout@v4
         with:
