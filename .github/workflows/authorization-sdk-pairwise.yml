@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: 8ac76d345df3b13b7b858ef1ba45ea22856e9d31
+          ref: 0bf7a926e7a348a02f348e2444a020f135769a80
           path: .pairwise/authorization
       - name: Verify canonical SDK source mirror
         run: diff -r .pairwise/authorization/authorization-sdk vendor/authorization-sdk

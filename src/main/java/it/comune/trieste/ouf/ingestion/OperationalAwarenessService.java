@@ -28,8 +28,26 @@ public class OperationalAwarenessService {
   }
 
   public Map<String,Object> summary(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    List<Map<String,Object>> items=incidents(null,source,since,limit,actor);long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
-    Map<String,Object> out=new LinkedHashMap<>();out.put("module","INGESTION");out.put("status",open>0?"DEGRADED":"HEALTHY");out.put("openIncidents",open);out.put("items",items);out.put("partial",false);return out;
+    var result=envelope("operations.status.read",incidents(null,source,since,limit,actor),actor);
+    @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)result.get("items");long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
+    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");boolean partial=Boolean.TRUE.equals(out.get("partial"));out.put("status",partial?"UNKNOWN":open>0?"DEGRADED":"HEALTHY");out.put("openIncidents",open);return out;
+  }
+  public Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor){
+    var visible=new ArrayList<Map<String,Object>>();boolean partial=false;
+    for(var row:rows){if(!visible(capability,row,actor)){partial=true;continue;}var safe=new LinkedHashMap<>(row);safe.remove("evidence_ref");safe.put("visibility_class","TENANT_OPERATIONAL");safe.put("authorization_decision_ref",actor.decisionRef()+":"+capability);visible.add(safe);}
+    // An empty result must still be authorized for the requested operational collection.
+    if(rows.isEmpty()&&!visible(capability,Map.of(),actor))partial=true;
+    return Map.of("items",visible,"partial",partial,"authorization",partial?"REDACTED":"AUTHORIZED");
+  }
+  public void requireVisible(String capability,Map<String,Object> row,TrustedAuthorizationContext.Context actor){if(!visible(capability,row,actor))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN,"ING_OPERATIONAL_NOT_AUTHORIZED");}
+  private boolean visible(String capability,Map<String,Object> row,TrustedAuthorizationContext.Context actor){
+    if(actor.owner()==null)return false;
+    var attributes=new HashMap<String,String>();attributes.put("module","INGESTION");attributes.put("detailLevel","TENANT_OPERATIONAL");
+    Object source=row.getOrDefault("source_ref",row.get("source_id")),job=row.getOrDefault("job_ref",row.get("run_id"));
+    if(source!=null)attributes.put("sourceRef",source.toString());if(job!=null)attributes.put("jobRef",job.toString());
+    Object id=row.getOrDefault("incident_id",row.getOrDefault("issue_id",job));
+    var decision=actor.owner().decide(capability,new it.comune.trieste.ouf.authorization.ResourceContext("operational",id==null?null:id.toString(),actor.tenantId(),null,attributes));
+    return decision.allowed()&&"TENANT_OPERATIONAL".equals(decision.permittedDetailLevel());
   }
 
   private static int bound(int value,int max){return Math.max(1,Math.min(value,max));}
