@@ -19,6 +19,7 @@ RESOLVED page. Database access in this test is stubbed; module CI supplies the
 existing database checks. No migration, scheduler change or grant publication.
 
 This does not complete persistent incident lifecycle, exact total pagination,
-30-day deployment retention or the production IAM/Gateway adapter. Those stay
+30-day deployment retention or live installation acceptance. The receipt/SDK adapter is now implemented;
+see R3_PRODUCER_IDENTITY.md. Deployment and actual policy refresh stay
 explicit R3 integration/acceptance gates. See the companion MCP and Gateway
 R3_SUMMARY_GOVERNED.md records for the execution topology and deployment gates.
