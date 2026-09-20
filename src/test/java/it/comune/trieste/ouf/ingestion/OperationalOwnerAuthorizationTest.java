@@ -29,4 +29,15 @@ class OperationalOwnerAuthorizationTest {
   var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
   http.perform(post("/api/internal/v1/ingestion/operations/summary").with(actor(true))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UNKNOWN")).andExpect(jsonPath("$.partial").value(true));
  }
+
+ @Test void recentPageCannotHideOlderOpenIncident()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  var resolved=Map.<String,Object>of("source_ref","source-a","lifecycle_state","RESOLVED");
+  var open=Map.<String,Object>of("source_ref","source-a","lifecycle_state","OPEN");
+  doReturn(List.of(resolved,open)).when(service).incidents(isNull(),any(),isNull(),eq(100),any());
+  doReturn(List.of(resolved)).when(service).incidents(isNull(),any(),any(),eq(1),any());
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  http.perform(post("/api/internal/v1/ingestion/operations/summary").contentType("application/json").content("{\"limit\":1,\"since\":\"2026-09-20T00:00:00Z\"}").with(actor(true)))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.partial").value(true));
+ }
 }

@@ -28,10 +28,22 @@ public class OperationalAwarenessService {
   }
 
   public Map<String,Object> summary(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    var result=envelope("operations.status.read",incidents(null,source,since,limit,actor),actor);
-    @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)result.get("items");long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
-    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");boolean partial=Boolean.TRUE.equals(out.get("partial"));out.put("status",partial?"UNKNOWN":open>0?"DEGRADED":"HEALTHY");out.put("openIncidents",open);return out;
+    // Catch-up rows and current health have different scopes. A small page or
+    // recent since filter must not hide an older unresolved incident.
+    var rows=incidents(null,source,since,limit,actor);
+    var result=envelope("operations.status.read",rows,actor);
+    var currentRows=incidents(null,source,null,100,actor);
+    var current=envelope("operations.status.read",currentRows,actor);
+    @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)current.get("items");
+    long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
+    boolean partial=Boolean.TRUE.equals(result.get("partial"))||Boolean.TRUE.equals(current.get("partial"))||currentRows.size()>=100||rows.size()>=bound(limit,100);
+    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");out.put("partial",partial);
+    out.put("status",open>0?"DEGRADED":partial?"UNKNOWN":"HEALTHY");
+    // Counts are only the authorized bounded scan, never advertised as totals.
+    if(!partial)out.put("openIncidents",open);
+    return out;
   }
+
   public Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor){
     var visible=new ArrayList<Map<String,Object>>();boolean partial=false;
     for(var row:rows){if(!visible(capability,row,actor)){partial=true;continue;}var safe=new LinkedHashMap<>(row);safe.remove("evidence_ref");safe.put("visibility_class","TENANT_OPERATIONAL");safe.put("authorization_decision_ref",actor.decisionRef()+":"+capability);visible.add(safe);}
