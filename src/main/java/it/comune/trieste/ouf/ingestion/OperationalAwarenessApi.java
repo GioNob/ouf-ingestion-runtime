@@ -37,5 +37,12 @@ public class OperationalAwarenessApi {
   }
 
   @PostMapping("/summary")
-  Map<String,Object> summary(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"operations.status.read");return service.summary(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor);}
+  Map<String,Object> summary(@RequestBody(required=false)Query q,HttpServletRequest request){
+    var actor=authorization.owner(request,"operations.status.read");
+    var now=OffsetDateTime.now(java.time.ZoneOffset.UTC);var since=q==null||q.since()==null?now.minusDays(1):q.since();
+    String source=q==null?null:q.sourceId();
+    if(limit(q)<1||limit(q)>100||(q!=null&&q.state()!=null)||(source!=null&&(source.isBlank()||source.length()>200))||since.isAfter(now)||since.isBefore(now.minusDays(30)))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"INVALID_SUMMARY_QUERY");
+    if(source!=null)service.requireVisible("operations.status.read",Map.of("source_ref",source),actor);
+    return service.summary(source,since,limit(q),actor);
+  }
 }
