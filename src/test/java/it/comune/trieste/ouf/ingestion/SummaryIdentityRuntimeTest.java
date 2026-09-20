@@ -1,7 +1,6 @@
 package it.comune.trieste.ouf.ingestion;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.junit.jupiter.api.Assertions.*;
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.receipt.SummaryReceiptFilter;
@@ -22,7 +21,7 @@ import org.springframework.test.context.*;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest @AutoConfigureMockMvc @DirtiesContext
+@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT) @DirtiesContext
 class SummaryIdentityRuntimeTest {
   static final String CAP="ouf.ingestion.operations.summary",SOURCE="receipt-source-"+UUID.randomUUID();
   static final Path KEY=key();
@@ -31,7 +30,7 @@ class SummaryIdentityRuntimeTest {
     r.add("spring.datasource.url",()->System.getenv("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ING_DB_PASSWORD"));
     r.add("ouf.summary.receipt-key-file",KEY::toString);r.add("ouf.summary.tenant-id",()->"tenant-a");r.add("ouf.summary.issuer",()->"https://auth.test");r.add("ouf.summary.audience",()->"gateway");r.add("ouf.summary.workload",()->"workload");
   }
-  @Autowired MockMvc http;@Autowired LocalAuthorization auth;@Autowired JdbcClient sql;
+  @org.springframework.boot.test.web.server.LocalServerPort int port;@Autowired LocalAuthorization auth;@Autowired JdbcClient sql;
   void policy(long version,boolean grant)throws Exception{
     var now=Instant.now();var producer=new GrantConstraints("ALLOW","ouf:viewer","capability",null,Map.of(),Set.of(),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null);
     var source=new GrantConstraints("ALLOW","ouf:viewer","operational",null,Map.of("sourceRef",SOURCE),Set.of(),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null);
@@ -48,12 +47,18 @@ class SummaryIdentityRuntimeTest {
     sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id,tenant_id) values(:r,:s,'b','1','sha256:x','REPLAY','RUNNING','corr','tenant-a')").param("r",run).param("s",SOURCE).update();
     sql.sql("insert into ouf_ingestion.runtime_issue(issue_id,run_id,source_id,type_code,severity,issue_code,evidence_ref,correlation_id) values(:i,:r,:s,'TEST','ERROR','ING_TEST','protected-evidence','corr')").param("i",issue).param("r",run).param("s",SOURCE).update();
     String body="{\"limit\":5,\"sourceId\":\""+SOURCE+"\"}",path="/api/internal/v1/ingestion/operations/summary";
-    http.perform(post(path).contentType("application/json").content(body).header(SummaryReceiptFilter.HEADER,receipt(body,"ouf:viewer",1))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("DEGRADED")).andExpect(jsonPath("$.items[0].source_ref").value(SOURCE)).andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("protected-evidence"))));
-    http.perform(post(path).contentType("application/json").content(body).header(SummaryReceiptFilter.HEADER,receipt(body,"",1)).header("X-OUF-External-Role-Refs","ouf:viewer")).andExpect(status().isForbidden());
+    var response=call(body,receipt(body,"ouf:viewer",1));assertEquals(200,response.statusCode(),response.body());
+    var result=new ObjectMapper().readTree(response.body());assertEquals("DEGRADED",result.path("status").asText());assertEquals(SOURCE,result.path("items").get(0).path("source_ref").asText());assertFalse(response.body().contains("protected-evidence"));
+    assertEquals(403,call(body,receipt(body,"",1)).statusCode());
     String other="{\"sourceId\":\"other-source\"}";
-    http.perform(post(path).contentType("application/json").content(other).header(SummaryReceiptFilter.HEADER,receipt(other,"ouf:viewer",1))).andExpect(status().isForbidden());
-    http.perform(post(path).contentType("application/json").content(body).header("X-OUF-Gateway-Verified","true")).andExpect(status().isForbidden());
+    assertEquals(403,call(other,receipt(other,"ouf:viewer",1)).statusCode());
+    assertEquals(403,call(body,null).statusCode());
     String prior=receipt(body,"ouf:viewer",1);policy(2,false);
-    http.perform(post(path).contentType("application/json").content(body).header(SummaryReceiptFilter.HEADER,prior)).andExpect(status().isForbidden());
+    assertEquals(403,call(body,prior).statusCode());
+  }
+  java.net.http.HttpResponse<String> call(String body,String signed)throws Exception{
+    var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+port+"/api/internal/v1/ingestion/operations/summary")).header("Content-Type","application/json").header("X-OUF-External-Role-Refs","ouf:viewer").header("X-OUF-Gateway-Verified","true").POST(java.net.http.HttpRequest.BodyPublishers.ofString(body));
+    if(signed!=null)request.header(SummaryReceiptFilter.HEADER,signed);
+    return java.net.http.HttpClient.newHttpClient().send(request.build(),java.net.http.HttpResponse.BodyHandlers.ofString());
   }
 }
