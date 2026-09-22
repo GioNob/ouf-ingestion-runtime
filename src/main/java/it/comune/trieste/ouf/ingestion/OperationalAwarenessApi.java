@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 public class OperationalAwarenessApi {
   private final OperationalAwarenessService service;
   private final RuntimeIssueService issues;
+  @org.springframework.beans.factory.annotation.Autowired private IncidentTimeline timeline;
   private final TrustedAuthorizationContext authorization;
 
   public OperationalAwarenessApi(OperationalAwarenessService service,RuntimeIssueService issues,TrustedAuthorizationContext authorization){
@@ -26,12 +27,14 @@ public class OperationalAwarenessApi {
   Map<String,Object> history(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"ingestion.operations.read");return service.envelope("ingestion.operations.read",service.history(q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),actor);}
 
   @PostMapping("/incidents")
-  Map<String,Object> incidents(@RequestBody(required=false)Query q,HttpServletRequest request){var actor=authorization.owner(request,"operations.incident.read");return service.envelope("operations.incident.read",service.incidents(q==null?null:q.state(),q==null?null:q.sourceId(),q==null?null:q.since(),limit(q),actor),actor);}
+  Map<String,Object> incidents(@RequestBody(required=false)IncidentTimeline.Query q,HttpServletRequest request){var actor=authorization.owner(request,"operations.incident.read");return timeline.page(q,actor);}
 
   @PostMapping("/incidents/explain")
   Map<String,Object> explain(@RequestBody ExplainQuery q,HttpServletRequest request){
     if(q==null||q.incidentId()==null)throw new IllegalArgumentException("ING_OPERATIONAL_INCIDENT_ID_REQUIRED");
-    var actor=authorization.owner(request,"operations.incident.explain");var row=issues.get(q.incidentId(),actor);
+    var actor=authorization.owner(request,"operations.incident.explain");
+    var persisted=timeline.explain(q.incidentId(),actor);if(persisted.isPresent())return persisted.orElseThrow();
+    var row=issues.get(q.incidentId(),actor);
     service.requireVisible("operations.incident.explain",row,actor);
     var result=issues.explain(q.incidentId(),actor);result.remove("evidenceRef");result.remove("quarantineId");return result;
   }
