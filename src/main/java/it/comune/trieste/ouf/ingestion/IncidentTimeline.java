@@ -25,7 +25,7 @@ public class IncidentTimeline {
     int limit=q.limit()==null?50:q.limit();
     if(limit<1||limit>100||(q.sourceId()!=null&&(q.sourceId().isBlank()||q.sourceId().length()>200))||
        (q.state()!=null&&!Set.of("OPEN","RECOVERING","RESOLVED").contains(q.state()))||
-       (q.severity()!=null&&!Set.of("WARNING","ERROR").contains(q.severity())))throw invalid();
+       (q.severity()!=null&&!Set.of("INFO","WARNING","ERROR","CRITICAL").contains(q.severity())))throw invalid();
     var now=OffsetDateTime.now(ZoneOffset.UTC);
     String binding=digest(actor.tenantId()+"\n"+actor.subject()+"\n"+q.sourceId()+"\n"+q.state()+"\n"+q.jobId()+"\n"+q.severity()+"\n"+limit);
     Cursor c;

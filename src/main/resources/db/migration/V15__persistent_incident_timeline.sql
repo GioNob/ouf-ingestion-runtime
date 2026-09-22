@@ -133,7 +133,8 @@ END $$;
 -- Backfill keeps the original incident times; migration time is not an occurrence time.
 UPDATE ouf_ingestion.operational_incident o SET first_seen_at=i.created_at,last_seen_at=coalesce(i.resolved_at,i.created_at),resolved_at=CASE WHEN i.status<>'OPEN' THEN coalesce(i.resolved_at,i.created_at) END
  FROM ouf_ingestion.runtime_issue i WHERE o.origin_key='issue:'||i.issue_id;
-UPDATE ouf_ingestion.operational_incident_transition t SET projection=t.projection||jsonb_build_object('first_seen_at',i.first_seen_at,'last_seen_at',i.last_seen_at,'resolved_at',i.resolved_at)
+UPDATE ouf_ingestion.operational_incident_transition t SET occurred_at=i.last_seen_at,projection=t.projection||jsonb_build_object('first_seen_at',i.first_seen_at,'last_seen_at',i.last_seen_at,'resolved_at',i.resolved_at,
+ 'duration_ms',CASE WHEN i.resolved_at IS NOT NULL THEN greatest(0,extract(epoch FROM i.resolved_at-i.first_seen_at)*1000)::bigint END)
  FROM ouf_ingestion.operational_incident i WHERE t.incident_id=i.incident_id;
 CREATE TRIGGER incident_transition_immutable BEFORE UPDATE ON ouf_ingestion.operational_incident_transition
  FOR EACH ROW EXECUTE FUNCTION ouf_ingestion.reject_history_mutation();
