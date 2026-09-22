@@ -23,8 +23,10 @@ public class OperationalAwarenessService {
 
   public List<Map<String,Object>> incidents(String state,String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
     if(state!=null&&!Set.of("OPEN","RECOVERING","RESOLVED").contains(state))throw new IllegalArgumentException("ING_OPERATIONAL_STATE_INVALID");
-    return sql.sql("select i.issue_id as incident_id,'INGESTION' as module,i.issue_code as event_type,case when i.status='OPEN' then 'OPEN' else 'RESOLVED' end as lifecycle_state,case when i.severity='ERROR' then 'ERROR' else 'WARNING' end as severity,i.created_at as first_seen_at,coalesce(i.resolved_at,i.created_at) as last_seen_at,i.resolved_at,i.run_id as job_ref,i.source_id as source_ref,i.issue_code as error_code,r.correlation_id,case when i.status='OPEN' then true else false end as action_required,i.evidence_ref,concat('Ingestion ',lower(i.status),' issue ',i.issue_code) as impact_summary,concat(i.source_id,':',i.issue_code) as dedup_key,'TENANT_OPERATIONAL' as visibility_class from ouf_ingestion.runtime_issue i join ouf_ingestion.ing_run r on r.run_id=i.run_id where r.tenant_id=:t and (cast(:s as text) is null or i.source_id=:s) and (cast(:since as timestamptz) is null or i.created_at>=:since) and (cast(:st as text) is null or (case when i.status='OPEN' then 'OPEN' else 'RESOLVED' end)=:st) order by i.created_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("since",since).param("st",state).param("n",bound(limit,100)).query().listOfRows();
+    var rows=sql.sql("select t.projection::text from ouf_ingestion.operational_incident i join lateral (select projection from ouf_ingestion.operational_incident_transition where incident_id=i.incident_id order by sequence_id desc limit 1) t on true where i.tenant_id=:t and (cast(:s as text) is null or i.source_id=:s) and (cast(:since as timestamptz) is null or i.last_seen_at>=:since) and (cast(:st as text) is null or i.lifecycle_state=:st) order by case when i.lifecycle_state='RESOLVED' then 1 else 0 end,i.last_seen_at desc,i.incident_id limit :n")
+      .param("t",actor.tenantId()).param("s",source).param("since",since).param("st",state).param("n",bound(limit,100)).query(String.class).list();
+    var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+    return rows.stream().map(raw->{try {return mapper.<Map<String,Object>>readValue(raw,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});}catch(Exception e){throw new IllegalStateException("ING_INCIDENT_PROJECTION_INVALID",e);}}).toList();
   }
 
   public Map<String,Object> summary(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
@@ -35,12 +37,13 @@ public class OperationalAwarenessService {
     var currentRows=incidents(null,source,null,100,actor);
     var current=envelope("operations.status.read",currentRows,actor,source==null?Map.of():Map.of("source_ref",source));
     @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)current.get("items");
+    long recovering=items.stream().filter(x->"RECOVERING".equals(x.get("lifecycle_state"))).count();
     long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
     boolean partial=Boolean.TRUE.equals(result.get("partial"))||Boolean.TRUE.equals(current.get("partial"))||currentRows.size()>=100||rows.size()>=bound(limit,100);
     var out=new LinkedHashMap<>(result);out.put("module","INGESTION");out.put("partial",partial);
-    out.put("status",open>0?"DEGRADED":partial?"UNKNOWN":"HEALTHY");
+    out.put("status",open>0?"DEGRADED":partial?"UNKNOWN":recovering>0?"RECOVERING":"HEALTHY");
     // Counts are only the authorized bounded scan, never advertised as totals.
-    if(!partial)out.put("openIncidents",open);
+    if(!partial){out.put("openIncidents",open);out.put("recoveringIncidents",recovering);}
     return out;
   }
 
