@@ -15,7 +15,8 @@ CREATE TABLE ouf_ingestion.operational_incident (
  incident_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  origin_key text NOT NULL UNIQUE,
  tenant_id text NOT NULL,
- run_id uuid NOT NULL REFERENCES ouf_ingestion.ing_run ON DELETE RESTRICT,
+ run_id uuid REFERENCES ouf_ingestion.ing_run ON DELETE RESTRICT,
+ schedule_id uuid REFERENCES ouf_ingestion.ing_schedule ON DELETE RESTRICT,
  source_id text NOT NULL,
  error_code text NOT NULL CHECK(error_code ~ '^[A-Z0-9_]{1,80}$'),
  lifecycle_state text NOT NULL CHECK(lifecycle_state IN('OPEN','RECOVERING','RESOLVED')),
@@ -48,16 +49,24 @@ CREATE TABLE ouf_ingestion.operational_incident_hold (
 );
 
 CREATE FUNCTION ouf_ingestion.record_incident(p_origin text,p_run uuid,p_code text,p_state text,
- p_event text,p_severity text,p_next timestamptz,p_attempts integer) RETURNS uuid LANGUAGE plpgsql AS $$
+ p_event text,p_severity text,p_next timestamptz,p_attempts integer,p_schedule uuid DEFAULT NULL) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE r ouf_ingestion.ing_run%ROWTYPE; i ouf_ingestion.operational_incident%ROWTYPE; days integer; ev uuid:=gen_random_uuid();
 BEGIN
  -- Serialize sequence allocation through commit, so a snapshot watermark cannot skip an uncommitted earlier event.
  PERFORM pg_advisory_xact_lock(hashtextextended('ouf-ingestion-incident-timeline',0));
- SELECT * INTO STRICT r FROM ouf_ingestion.ing_run WHERE run_id=p_run;
+ IF p_run IS NOT NULL THEN
+  SELECT * INTO STRICT r FROM ouf_ingestion.ing_run WHERE run_id=p_run;
+ ELSE
+  SELECT tenant_id,source_id INTO STRICT r.tenant_id,r.source_id FROM ouf_ingestion.ing_schedule WHERE schedule_id=p_schedule;
+  r.correlation_id:='schedule:'||p_schedule;
+ END IF;
  SELECT greatest(30,least(3650,coalesce((snapshot_json#>>'{configuration,syncProfile,operationalPolicy,operationalRetentionDays}')::integer,30)))
  INTO days FROM ouf_ingestion.runtime_configuration_snapshot WHERE run_id=p_run;
- INSERT INTO ouf_ingestion.operational_incident(origin_key,tenant_id,run_id,source_id,error_code,lifecycle_state,event_type,severity,resolved_at,next_retry_at,attempt_count,retain_until)
- VALUES(p_origin,r.tenant_id,p_run,r.source_id,p_code,p_state,p_event,p_severity,
+ IF p_run IS NULL THEN
+  SELECT greatest(30,least(3650,coalesce((sync_profile#>>'{operationalPolicy,operationalRetentionDays}')::integer,30))) INTO days FROM ouf_ingestion.ing_schedule WHERE schedule_id=p_schedule;
+ END IF;
+ INSERT INTO ouf_ingestion.operational_incident(origin_key,tenant_id,run_id,schedule_id,source_id,error_code,lifecycle_state,event_type,severity,resolved_at,next_retry_at,attempt_count,retain_until)
+ VALUES(p_origin,r.tenant_id,p_run,p_schedule,r.source_id,p_code,p_state,p_event,p_severity,
   CASE WHEN p_state='RESOLVED' THEN transaction_timestamp() END,p_next,p_attempts,transaction_timestamp()+coalesce(days,30)*interval '1 day')
  ON CONFLICT(origin_key) DO UPDATE SET lifecycle_state=p_state,event_type=p_event,severity=p_severity,
  last_seen_at=transaction_timestamp(),resolved_at=CASE WHEN p_state='RESOLVED' THEN transaction_timestamp() END,
@@ -90,12 +99,12 @@ BEGIN
     CASE WHEN NEW.state='RETRY_WAIT' THEN 'RETRY_SCHEDULED' ELSE 'RUN_FAILED' END,'ERROR',
     CASE WHEN NEW.state='RETRY_WAIT' THEN retry_at END,attempts);
  ELSIF NEW.state IN('SUCCEEDED','COMPLETED_WITH_WARNINGS') AND NEW.state IS DISTINCT FROM OLD.state THEN
-  FOR i IN SELECT * FROM ouf_ingestion.operational_incident WHERE run_id=NEW.run_id AND origin_key LIKE 'run:%' AND lifecycle_state<>'RESOLVED' LOOP
-   PERFORM ouf_ingestion.record_incident(i.origin_key,NEW.run_id,i.error_code,'RESOLVED','RUN_RECOVERED',i.severity,NULL,i.attempt_count);
+  FOR i IN SELECT * FROM ouf_ingestion.operational_incident WHERE (run_id=NEW.run_id AND origin_key LIKE 'run:%' OR schedule_id=NEW.schedule_id AND origin_key LIKE 'schedule:%') AND lifecycle_state<>'RESOLVED' LOOP
+   PERFORM ouf_ingestion.record_incident(i.origin_key,i.run_id,i.error_code,'RESOLVED','RUN_RECOVERED',i.severity,NULL,i.attempt_count,i.schedule_id);
   END LOOP;
  ELSIF NEW.state IN('RUNNING','PREFLIGHT') AND OLD.state IN('RETRY_WAIT','PAUSED') THEN
-  FOR i IN SELECT * FROM ouf_ingestion.operational_incident WHERE run_id=NEW.run_id AND origin_key LIKE 'run:%' AND lifecycle_state<>'RESOLVED' LOOP
-   PERFORM ouf_ingestion.record_incident(i.origin_key,NEW.run_id,i.error_code,'RECOVERING','RETRY_STARTED',i.severity,NULL,i.attempt_count);
+  FOR i IN SELECT * FROM ouf_ingestion.operational_incident WHERE (run_id=NEW.run_id AND origin_key LIKE 'run:%' OR schedule_id=NEW.schedule_id AND origin_key LIKE 'schedule:%') AND lifecycle_state<>'RESOLVED' LOOP
+   PERFORM ouf_ingestion.record_incident(i.origin_key,i.run_id,i.error_code,'RECOVERING','RETRY_STARTED',i.severity,NULL,i.attempt_count,i.schedule_id);
   END LOOP;
  END IF;
  RETURN NEW;
@@ -139,7 +148,14 @@ BEGIN
   WHERE lifecycle_state='RESOLVED' AND retain_until<transaction_timestamp() AND resolved_at<transaction_timestamp()-interval '30 days'
    AND NOT EXISTS(SELECT 1 FROM ouf_ingestion.operational_incident_hold h WHERE h.incident_id=x.incident_id)
    AND NOT EXISTS(SELECT 1 FROM ouf_ingestion.ing_lineage l WHERE l.run_id=x.run_id)
-   AND NOT EXISTS(SELECT 1 FROM ouf_ingestion.audit_event a WHERE a.resource_id IN(x.run_id::text,x.incident_id::text))
+   AND NOT EXISTS(SELECT 1 FROM ouf_ingestion.ing_run r
+     JOIN ouf_ingestion.runtime_configuration_snapshot s USING(run_id)
+     JOIN (SELECT DISTINCT ON(tenant_id,contract_ref) tenant_id,contract_ref,action
+       FROM ouf_ingestion.historical_contract_legal_hold_event ORDER BY tenant_id,contract_ref,created_at DESC,event_id DESC) h
+       ON h.tenant_id=r.tenant_id AND h.action='APPLY'
+     WHERE r.run_id=x.run_id AND ((r.bundle_id||':'||r.bundle_version||':'||r.bundle_checksum)=h.contract_ref
+       OR jsonb_path_exists(s.snapshot_json,'$.** ? (@ == $ref)',jsonb_build_object('ref',h.contract_ref))))
+   AND NOT EXISTS(SELECT 1 FROM ouf_ingestion.audit_event a WHERE a.resource_id IN(x.run_id::text,x.incident_id::text,x.schedule_id::text,replace(x.origin_key,'issue:','')))
   ORDER BY retain_until,x.incident_id LIMIT p_limit FOR UPDATE OF x SKIP LOCKED LOOP
   DELETE FROM ouf_ingestion.operational_incident_transition WHERE incident_id=i.incident_id;
   DELETE FROM ouf_ingestion.operational_incident WHERE incident_id=i.incident_id;

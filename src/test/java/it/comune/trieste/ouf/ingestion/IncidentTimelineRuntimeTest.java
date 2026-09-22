@@ -1,7 +1,8 @@
 package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.authorization.TestAuthorization;
 import java.time.*;
@@ -83,6 +84,14 @@ import org.springframework.transaction.support.TransactionTemplate;
   sql.sql("select ouf_ingestion.prune_resolved_incidents(100)").query(Integer.class).single();
   assertThat(sql.sql("select count(*) from ouf_ingestion.operational_incident where run_id=:r").param("r",run).query(Long.class).single()).isEqualTo(3);
  }
+ @Test void expiredUnreferencedIncidentCanBePrunedButTransitionsCannotBeRewritten(){
+  UUID run=start(0);emit(run,"ING_OLD","RESOLVED");UUID id=(UUID)incident(run).get("incident_id");
+  assertThatThrownBy(()->sql.sql("update ouf_ingestion.operational_incident_transition set projection='{}' where incident_id=:i").param("i",id).update()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+  sql.sql("update ouf_ingestion.operational_incident set retain_until=transaction_timestamp()-interval '40 days',resolved_at=transaction_timestamp()-interval '40 days' where incident_id=:i").param("i",id).update();
+  sql.sql("select ouf_ingestion.prune_resolved_incidents(100)").query(Integer.class).single();
+  assertThat(count(run)).isZero();
+  assertThat(sql.sql("select count(*) from ouf_ingestion.operational_incident where incident_id=:i").param("i",id).query(Long.class).single()).isZero();
+ }
  private UUID start(int attempts){String source="timeline-"+UUID.randomUUID();var config=Map.<String,Object>of("syncProfile",Map.of("retryBackoffSeconds",1,"operationalPolicy",Map.of("maxRetryAttempts",attempts,"maxRetryElapsedSeconds",600,"operationalRetentionDays",45)));
   UUID run=runs.createPreflightRun(new RunStateRepository.ScheduleClaim(UUID.randomUUID(),"tenant-a",source,300,"scheduler"),new ExecutionBundle("b","1","sha256:b",source,"REST_JSON","gateway://source",config),"correlation-test");runs.preflightSucceeded(run);return run;}
  private RunExecutionRepository.Claim lease(UUID run,String worker,long generation){sql.sql("update ouf_ingestion.ing_partition set lease_owner=:w,lease_generation=:g,lease_until=transaction_timestamp()+interval '2 minutes' where run_id=:r").param("w",worker).param("g",generation).param("r",run).update();return new RunExecutionRepository.Claim(run,"default",Map.of(),generation,worker);}
@@ -91,6 +100,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  private long count(UUID run){return sql.sql("select count(*) from ouf_ingestion.operational_incident_transition t join ouf_ingestion.operational_incident i using(incident_id) where i.run_id=:r").param("r",run).query(Long.class).single();}
  private void emit(UUID run,String code,String state){sql.sql("select ouf_ingestion.record_incident(:key,:run,:code,:state,'TEST_EVENT','ERROR',null,0)").param("key",run+":"+code).param("run",run).param("code",code).param("state",state).query(UUID.class).single();}
  private RunCoordinator.Failure transientFailure(Duration after){return new RunCoordinator.Failure("ING_SOURCE_UNREACHABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,after);}
- private TrustedAuthorizationContext.Context actor(){var request=new MockHttpServletRequest();TestAuthorization.bind(request,"reader","HUMAN",Set.of("operations.incident.read","operations.incident.explain"));return new TrustedAuthorizationContext().owner(request,"operations.incident.read");}
+ private TrustedAuthorizationContext.Context actor(){var request=new MockHttpServletRequest();TestAuthorization.bind(request,"reader","HUMAN",Set.of("operations.incident.read","operations.incident.explain"));var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();
+  var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,"operational",null,Map.of("module","INGESTION"),Set.of(),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+  try{TestAuthorization.install(engine,new PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception e){throw new IllegalStateException(e);}
+  return new TrustedAuthorizationContext().owner(request,"operations.incident.read");}
  @SuppressWarnings("unchecked")private List<Map<String,Object>> items(Map<String,Object> page){return (List<Map<String,Object>>)page.get("items");}
 }
