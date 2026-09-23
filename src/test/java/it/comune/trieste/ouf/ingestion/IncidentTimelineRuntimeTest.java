@@ -76,6 +76,20 @@ import org.springframework.transaction.support.TransactionTemplate;
   assertThat(items(deniedPage)).isEmpty();assertThat(deniedPage.get("partial")).isEqualTo(true);
   assertThatThrownBy(()->timeline.page(new IncidentTimeline.Query("different",null,null,1,null,(String)first.get("nextCursor"),null,null),actor)).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
  }
+ @Test void historyWindowSelectsOnlyRequestedTenantSourceAndLatestRun(){
+  String source="history-"+UUID.randomUUID();var now=OffsetDateTime.now(ZoneOffset.UTC);
+  UUID older=UUID.randomUUID(),recent=UUID.randomUUID(),outside=UUID.randomUUID(),otherTenant=UUID.randomUUID();
+  for(var entry:Map.of(older,now.minusHours(2),recent,now.minusHours(1),outside,now.minusDays(2),otherTenant,now.minusMinutes(45)).entrySet()){
+   sql.sql("insert into ouf_ingestion.ing_run(run_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id,tenant_id,created_at,updated_at) values(:id,:source,'bundle','1','hash','FULL_SNAPSHOT','SUCCEEDED','history-correlation',:tenant,:at,:at)")
+    .param("id",entry.getKey()).param("source",source).param("tenant",entry.getKey().equals(otherTenant)?"other-tenant":"tenant-a").param("at",entry.getValue()).update();
+  }
+  var owner=new OperationalAwarenessService(sql);
+  var page=owner.history(source,now.minusHours(3),now.minusMinutes(30),1,actor());
+  assertThat(page).hasSize(1);
+  assertThat(page.getFirst().get("job_ref")).isEqualTo(recent);
+  assertThat(owner.history(source,now.minusHours(3),now.minusMinutes(30),200,actor())).hasSize(2);
+  assertThat(owner.history(source,now.minusMinutes(50),now.minusMinutes(30),200,actor())).isEmpty();
+ }
  @Test void retentionNeverDeletesOpenHeldOrRecentResolvedIncidents(){
   UUID run=start(0);emit(run,"ING_RECENT","RESOLVED");emit(run,"ING_OPEN","OPEN");emit(run,"ING_HELD","RESOLVED");
   UUID held=sql.sql("select incident_id from ouf_ingestion.operational_incident where run_id=:r and error_code='ING_HELD'").param("r",run).query(UUID.class).single();

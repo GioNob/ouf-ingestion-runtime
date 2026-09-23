@@ -30,6 +30,47 @@ class OperationalOwnerAuthorizationTest {
   http.perform(post("/api/internal/v1/ingestion/operations/summary").with(actor(true))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UNKNOWN")).andExpect(jsonPath("$.partial").value(true));
  }
 
+ @Test void historyRejectsInvalidWindowsAndLimitsBeforeReading()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  for(String body:List.of("{\"limit\":201}","{\"limit\":0}","{\"since\":\"2026-01-01T00:00:00Z\"}","{\"since\":\"2026-09-21T00:00:00Z\",\"until\":\"2026-09-20T00:00:00Z\"}","{\"until\":\"2099-01-01T00:00:00Z\"}"))
+   http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json").content(body).with(actor(true))).andExpect(status().isBadRequest());
+  verify(service,never()).history(any(),any(),any(),anyInt(),any());
+ }
+
+ @Test void historyChecksRequestedSourceBeforeEmptyResults()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json").content("{\"sourceId\":\"source-b\"}").with(actor(true))).andExpect(status().isForbidden());
+  verify(service,never()).history(any(),any(),any(),anyInt(),any());
+ }
+
+ @Test void historyReturnsEffectiveWindowAndRedactsOtherSources()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  doReturn(List.of(Map.of("source_ref","source-a","job_ref","safe-run"),Map.of("source_ref","source-b","job_ref","hidden-run")))
+   .when(service).history(eq("source-a"),any(),any(),eq(3),any());
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json")
+   .content("{\"sourceId\":\"source-a\",\"since\":\"2026-09-21T00:00:00Z\",\"until\":\"2026-09-22T00:00:00Z\",\"limit\":2}").with(actor(true)))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true)).andExpect(jsonPath("$.hasMore").value(false))
+   .andExpect(jsonPath("$.items.length()").value(1)).andExpect(jsonPath("$.items[0].job_ref").value("safe-run"))
+   .andExpect(jsonPath("$.until").value("2026-09-22T00:00:00Z"))
+   .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("hidden-run"))));
+ }
+
+ @Test void historySignalsTruncationWithoutReturningExtraRun()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  doReturn(List.of(Map.of("source_ref","source-a","job_ref","first"),Map.of("source_ref","source-a","job_ref","second")))
+   .when(service).history(eq("source-a"),any(),any(),eq(2),any());
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json")
+   .content("{\"sourceId\":\"source-a\",\"limit\":1}").with(actor(true)))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true))
+   .andExpect(jsonPath("$.hasMore").value(true)).andExpect(jsonPath("$.items.length()").value(1))
+   .andExpect(jsonPath("$.items[0].job_ref").value("first"))
+   .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("second"))));
+ }
+
  @Test void recentPageCannotHideOlderOpenIncident()throws Exception{
   var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
   var resolved=Map.<String,Object>of("source_ref","source-a","lifecycle_state","RESOLVED");

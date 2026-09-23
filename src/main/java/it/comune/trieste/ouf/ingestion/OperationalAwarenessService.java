@@ -16,9 +16,12 @@ public class OperationalAwarenessService {
       .param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows();
   }
 
-  public List<Map<String,Object>> history(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    return sql.sql("select run_id as job_ref,source_id as source_ref,state as run_state,failure_code as error_code,correlation_id,created_at as first_seen_at,updated_at as last_seen_at from ouf_ingestion.ing_run where tenant_id=:t and (cast(:s as text) is null or source_id=:s) and (cast(:since as timestamptz) is null or updated_at>=:since) order by updated_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows();
+  public List<Map<String,Object>> history(String source,OffsetDateTime since,OffsetDateTime until,int limit,TrustedAuthorizationContext.Context actor){
+    var query=sql.sql("select run_id as job_ref,source_id as source_ref,state as run_state,failure_code as error_code,correlation_id,created_at as first_seen_at,updated_at as last_seen_at,retry_stage from ouf_ingestion.ing_run where tenant_id=:t"+
+      (source==null?"":" and source_id=:s")+" and updated_at between :since and :until order by updated_at desc,run_id desc limit :n")
+      .param("t",actor.tenantId()).param("since",since).param("until",until).param("n",limit);
+    if(source!=null)query=query.param("s",source);
+    return query.query().listOfRows();
   }
 
   public List<Map<String,Object>> incidents(String state,String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
