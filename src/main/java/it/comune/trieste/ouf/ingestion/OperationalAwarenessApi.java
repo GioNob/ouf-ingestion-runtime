@@ -41,7 +41,11 @@ public class OperationalAwarenessApi {
        since.isAfter(until)||until.isAfter(now.plusSeconds(1))||Duration.between(since,until).compareTo(Duration.ofDays(30))>0)
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"ING_HISTORY_QUERY_INVALID");
     if(source!=null)service.requireVisible("ingestion.operations.read",Map.of("source_ref",source),actor);
-    var out=new LinkedHashMap<>(service.envelope("ingestion.operations.read",service.history(source,since,until,pageSize,actor),actor));
+    var rows=service.history(source,since,until,pageSize+1,actor);
+    boolean hasMore=rows.size()>pageSize;
+    var out=new LinkedHashMap<>(service.envelope("ingestion.operations.read",hasMore?rows.subList(0,pageSize):rows,actor));
+    out.put("hasMore",hasMore);
+    if(hasMore)out.put("partial",true);
     out.put("since",DateTimeFormatter.ISO_INSTANT.format(since.toInstant()));
     out.put("until",DateTimeFormatter.ISO_INSTANT.format(until.toInstant()));
     return out;

@@ -48,14 +48,27 @@ class OperationalOwnerAuthorizationTest {
  @Test void historyReturnsEffectiveWindowAndRedactsOtherSources()throws Exception{
   var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
   doReturn(List.of(Map.of("source_ref","source-a","job_ref","safe-run"),Map.of("source_ref","source-b","job_ref","hidden-run")))
-   .when(service).history(eq("source-a"),any(),any(),eq(2),any());
+   .when(service).history(eq("source-a"),any(),any(),eq(3),any());
   var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
   http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json")
    .content("{\"sourceId\":\"source-a\",\"since\":\"2026-09-21T00:00:00Z\",\"until\":\"2026-09-22T00:00:00Z\",\"limit\":2}").with(actor(true)))
-   .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true)).andExpect(jsonPath("$.hasMore").value(false))
    .andExpect(jsonPath("$.items.length()").value(1)).andExpect(jsonPath("$.items[0].job_ref").value("safe-run"))
    .andExpect(jsonPath("$.until").value("2026-09-22T00:00:00Z"))
    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("hidden-run"))));
+ }
+
+ @Test void historySignalsTruncationWithoutReturningExtraRun()throws Exception{
+  var service=spy(new OperationalAwarenessService(mock(JdbcClient.class)));
+  doReturn(List.of(Map.of("source_ref","source-a","job_ref","first"),Map.of("source_ref","source-a","job_ref","second")))
+   .when(service).history(eq("source-a"),any(),any(),eq(2),any());
+  var http=MockMvcBuilders.standaloneSetup(new OperationalAwarenessApi(service,mock(RuntimeIssueService.class),new TrustedAuthorizationContext())).build();
+  http.perform(post("/api/internal/v1/ingestion/operations/history").contentType("application/json")
+   .content("{\"sourceId\":\"source-a\",\"limit\":1}").with(actor(true)))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true))
+   .andExpect(jsonPath("$.hasMore").value(true)).andExpect(jsonPath("$.items.length()").value(1))
+   .andExpect(jsonPath("$.items[0].job_ref").value("first"))
+   .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("second"))));
  }
 
  @Test void recentPageCannotHideOlderOpenIncident()throws Exception{
