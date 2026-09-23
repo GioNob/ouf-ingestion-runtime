@@ -16,27 +16,46 @@ public class OperationalAwarenessService {
       .param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows();
   }
 
-  public List<Map<String,Object>> history(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    return sql.sql("select run_id as job_ref,source_id as source_ref,state as run_state,failure_code as error_code,correlation_id,created_at as first_seen_at,updated_at as last_seen_at from ouf_ingestion.ing_run where tenant_id=:t and (cast(:s as text) is null or source_id=:s) and (cast(:since as timestamptz) is null or updated_at>=:since) order by updated_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows();
+  public List<Map<String,Object>> history(String source,OffsetDateTime since,OffsetDateTime until,int limit,TrustedAuthorizationContext.Context actor){
+    var query=sql.sql("select run_id as job_ref,source_id as source_ref,state as run_state,failure_code as error_code,correlation_id,created_at as first_seen_at,updated_at as last_seen_at,retry_stage from ouf_ingestion.ing_run where tenant_id=:t"+
+      (source==null?"":" and source_id=:s")+" and updated_at between :since and :until order by updated_at desc,run_id desc limit :n")
+      .param("t",actor.tenantId()).param("since",since).param("until",until).param("n",limit);
+    if(source!=null)query=query.param("s",source);
+    return query.query().listOfRows();
   }
 
   public List<Map<String,Object>> incidents(String state,String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
     if(state!=null&&!Set.of("OPEN","RECOVERING","RESOLVED").contains(state))throw new IllegalArgumentException("ING_OPERATIONAL_STATE_INVALID");
-    return sql.sql("select i.issue_id as incident_id,'INGESTION' as module,i.issue_code as event_type,case when i.status='OPEN' then 'OPEN' else 'RESOLVED' end as lifecycle_state,case when i.severity='ERROR' then 'ERROR' else 'WARNING' end as severity,i.created_at as first_seen_at,coalesce(i.resolved_at,i.created_at) as last_seen_at,i.resolved_at,i.run_id as job_ref,i.source_id as source_ref,i.issue_code as error_code,r.correlation_id,case when i.status='OPEN' then true else false end as action_required,i.evidence_ref,concat('Ingestion ',lower(i.status),' issue ',i.issue_code) as impact_summary,concat(i.source_id,':',i.issue_code) as dedup_key,'TENANT_OPERATIONAL' as visibility_class from ouf_ingestion.runtime_issue i join ouf_ingestion.ing_run r on r.run_id=i.run_id where r.tenant_id=:t and (cast(:s as text) is null or i.source_id=:s) and (cast(:since as timestamptz) is null or i.created_at>=:since) and (cast(:st as text) is null or (case when i.status='OPEN' then 'OPEN' else 'RESOLVED' end)=:st) order by i.created_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("since",since).param("st",state).param("n",bound(limit,100)).query().listOfRows();
+    var rows=sql.sql("select t.projection::text from ouf_ingestion.operational_incident i join lateral (select projection from ouf_ingestion.operational_incident_transition where incident_id=i.incident_id order by sequence_id desc limit 1) t on true where i.tenant_id=:t and (cast(:s as text) is null or i.source_id=:s) and (cast(:since as timestamptz) is null or i.last_seen_at>=:since) and (cast(:st as text) is null or i.lifecycle_state=:st) order by case when i.lifecycle_state='RESOLVED' then 1 else 0 end,i.last_seen_at desc,i.incident_id limit :n")
+      .param("t",actor.tenantId()).param("s",source).param("since",since).param("st",state).param("n",bound(limit,100)).query(String.class).list();
+    var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+    return rows.stream().map(raw->{try {return mapper.<Map<String,Object>>readValue(raw,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});}catch(Exception e){throw new IllegalStateException("ING_INCIDENT_PROJECTION_INVALID",e);}}).toList();
   }
 
   public Map<String,Object> summary(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    var result=envelope("operations.status.read",incidents(null,source,since,limit,actor),actor);
-    @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)result.get("items");long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
-    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");boolean partial=Boolean.TRUE.equals(out.get("partial"));out.put("status",partial?"UNKNOWN":open>0?"DEGRADED":"HEALTHY");out.put("openIncidents",open);return out;
+    // Catch-up rows and current health have different scopes. A small page or
+    // recent since filter must not hide an older unresolved incident.
+    var rows=incidents(null,source,since,limit,actor);
+    var result=envelope("operations.status.read",rows,actor,source==null?Map.of():Map.of("source_ref",source));
+    var currentRows=incidents(null,source,null,100,actor);
+    var current=envelope("operations.status.read",currentRows,actor,source==null?Map.of():Map.of("source_ref",source));
+    @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)current.get("items");
+    long recovering=items.stream().filter(x->"RECOVERING".equals(x.get("lifecycle_state"))).count();
+    long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
+    boolean partial=Boolean.TRUE.equals(result.get("partial"))||Boolean.TRUE.equals(current.get("partial"))||currentRows.size()>=100||rows.size()>=bound(limit,100);
+    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");out.put("partial",partial);
+    out.put("status",open>0?"DEGRADED":partial?"UNKNOWN":recovering>0?"RECOVERING":"HEALTHY");
+    // Counts are only the authorized bounded scan, never advertised as totals.
+    if(!partial){out.put("openIncidents",open);out.put("recoveringIncidents",recovering);}
+    return out;
   }
-  public Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor){
+
+  public Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor){return envelope(capability,rows,actor,Map.of());}
+  private Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor,Map<String,Object> emptyResource){
     var visible=new ArrayList<Map<String,Object>>();boolean partial=false;
     for(var row:rows){if(!visible(capability,row,actor)){partial=true;continue;}var safe=new LinkedHashMap<>(row);safe.remove("evidence_ref");safe.put("visibility_class","TENANT_OPERATIONAL");safe.put("authorization_decision_ref",actor.decisionRef()+":"+capability);visible.add(safe);}
     // An empty result must still be authorized for the requested operational collection.
-    if(rows.isEmpty()&&!visible(capability,Map.of(),actor))partial=true;
+    if(rows.isEmpty()&&!visible(capability,emptyResource,actor))partial=true;
     return Map.of("items",visible,"partial",partial,"authorization",partial?"REDACTED":"AUTHORIZED");
   }
   public void requireVisible(String capability,Map<String,Object> row,TrustedAuthorizationContext.Context actor){if(!visible(capability,row,actor))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN,"ING_OPERATIONAL_NOT_AUTHORIZED");}
