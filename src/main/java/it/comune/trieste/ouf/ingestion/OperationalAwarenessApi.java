@@ -41,7 +41,7 @@ public class OperationalAwarenessApi {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"ING_HISTORY_QUERY_INVALID");
     if(source!=null)service.requireVisible("ingestion.operations.read",Map.of("source_ref",source),actor);
     var out=new LinkedHashMap<>(service.envelope("ingestion.operations.read",service.history(source,since,until,pageSize,actor),actor));
-    out.put("since",since);out.put("until",until);
+    out.put("since",since.toString());out.put("until",until.toString());
     return out;
   }
 
