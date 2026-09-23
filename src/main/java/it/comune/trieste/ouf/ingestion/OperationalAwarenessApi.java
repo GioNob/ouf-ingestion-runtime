@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -41,7 +42,8 @@ public class OperationalAwarenessApi {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"ING_HISTORY_QUERY_INVALID");
     if(source!=null)service.requireVisible("ingestion.operations.read",Map.of("source_ref",source),actor);
     var out=new LinkedHashMap<>(service.envelope("ingestion.operations.read",service.history(source,since,until,pageSize,actor),actor));
-    out.put("since",since.toString());out.put("until",until.toString());
+    out.put("since",DateTimeFormatter.ISO_INSTANT.format(since.toInstant()));
+    out.put("until",DateTimeFormatter.ISO_INSTANT.format(until.toInstant()));
     return out;
   }
 
