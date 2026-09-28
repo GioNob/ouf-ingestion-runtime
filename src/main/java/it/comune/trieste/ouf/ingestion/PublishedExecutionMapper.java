@@ -40,6 +40,11 @@ public final class PublishedExecutionMapper {
       }else if(!Set.of("INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX").contains(mode)||!"managed-tabular-v1".equals(config.get("adapterId")))throw invalid();
       binding=PublishedActivation.text(runtime,"stagingRef");
       config.put("expectedHash",PublishedActivation.text(runtime,"contentHash"));
+      if("INTERNAL_MANAGED_CSV".equals(mode)){
+        Object delimiter=runtime.getOrDefault("csvDelimiter",",");
+        if(!(delimiter instanceof String value)||!Set.of(",",";").contains(value))throw invalid();
+        config.put("csvDelimiter",delimiter);
+      }
       if(keys.equals(List.of("$managedRowOrdinal")))config.put("identityFields",List.of());
     }else if(!Set.of("REST_JSON","WFS").contains(mode))throw invalid();
     if(config.get("changeRepresentationProfile")==null)throw new IllegalArgumentException("ING_CHANGE_PROFILE_REQUIRED");
