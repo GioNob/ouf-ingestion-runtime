@@ -6,6 +6,11 @@ Normative priority: L0 invariants > PET v1.2 > frozen rc3 contracts > implementa
 
 The deployable owns adapter execution, PULL scheduling, managed-file ingestion, transformation, checkpointing, durable handoff, lineage, quarantine and operational state. It does not own onboarding, semantic authoring, authoritative Urban Object resolution, final UDP persistence, IAM policy or Gateway routing.
 
+For managed CSV, the frozen Onboarding runtime carries `csvDelimiter` (`;` or `,`).
+The adapter removes an optional leading UTF-8 BOM only while parsing; the
+approved byte count and content hash still cover the original file. Historical
+bundles without the field retain comma parsing.
+
 No module is accepted without adapter contract tests, restart/idempotency evidence, durable-ACK/watermark tests, structured logs, audit, metrics and governed operational/THS integration.
 
 
