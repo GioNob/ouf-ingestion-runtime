@@ -64,8 +64,21 @@ public class DurablePipelineRepository {
       if(alreadyAcked)return;
       throw new IllegalStateException("ING_ACK_LEASE_MISMATCH");
     }
+    resolveGovernedRetries(handoffId,worker);
     sql.sql("with target as (select run_id,partition_key from ouf_ingestion.handoff_outbox where handoff_id=:h and state='ACKED'), eligible as (select x.* from ouf_ingestion.handoff_outbox x join target t using(run_id,partition_key) where x.state='ACKED' and not exists(select 1 from ouf_ingestion.handoff_outbox prior where prior.run_id=x.run_id and prior.partition_key=x.partition_key and prior.sequence_no<=x.sequence_no and prior.state<>'ACKED') order by x.sequence_no desc limit 1) insert into ouf_ingestion.ing_watermark(source_id,partition_key,watermark_json,committed_handoff_id) select r.source_id,e.partition_key,e.candidate_watermark_json,e.handoff_id from eligible e join ouf_ingestion.ing_run r on r.run_id=e.run_id on conflict(source_id,partition_key) do update set watermark_json=excluded.watermark_json,committed_handoff_id=excluded.committed_handoff_id,committed_at=transaction_timestamp(),lock_version=ouf_ingestion.ing_watermark.lock_version+1")
       .param("h",handoffId).update();
+  }
+
+  /** Resolve only HUMAN-authorized, earlier failures of this exact record after durable ACK. */
+  private void resolveGovernedRetries(UUID handoffId,String worker){
+    List<Map<String,Object>> resolved=sql.sql("update ouf_ingestion.ing_quarantine q set state='RELEASED',lifecycle_state='RESOLVED',lifecycle_version=q.lifecycle_version+1,resolved_at=transaction_timestamp(),resolution_reason='DURABLE_DOWNSTREAM_ACK',resolution_actor=:w from ouf_ingestion.handoff_outbox h join ouf_ingestion.ing_lineage l using(lineage_id) join ouf_ingestion.processing_attempt a on a.attempt_id=l.attempt_id join ouf_ingestion.ing_run r on r.run_id=h.run_id,ouf_ingestion.processing_attempt failed where h.handoff_id=:h and h.state='ACKED' and a.state='SUCCEEDED' and q.run_id=h.run_id and q.source_object_id=l.source_object_id and q.attempt_id=failed.attempt_id and failed.run_id=h.run_id and failed.source_object_id=l.source_object_id and failed.state='FAILED' and failed.attempt_no<a.attempt_no and q.lifecycle_state='RETRY_READY' and q.authorization_decision_ref is not null returning q.quarantine_id,q.correlation_id,q.authorization_decision_ref,r.tenant_id")
+      .param("w",worker).param("h",handoffId).query().listOfRows();
+    for(Map<String,Object> q:resolved){
+      UUID quarantine=(UUID)q.get("quarantine_id");
+      sql.sql("update ouf_ingestion.runtime_issue set status='RESOLVED',resolution_reason='DURABLE_DOWNSTREAM_ACK',resolution_actor=:w,resolved_at=transaction_timestamp(),lock_version=lock_version+1 where quarantine_id=:q and status='OPEN'").param("w",worker).param("q",quarantine).update();
+      sql.sql("insert into ouf_ingestion.audit_event(event_id,event_type,actor_subject,actor_type,resource_type,resource_id,correlation_id,detail_json,tenant_id,authorization_decision_ref) values(:i,'QUARANTINE_RETRY_RESOLVED',:w,'SERVICE','QUARANTINE',:q,:c,jsonb_build_object('handoffId',cast(:h as text),'resolution','DURABLE_DOWNSTREAM_ACK'),:t,:d)")
+        .param("i",UUID.randomUUID()).param("w",worker).param("q",quarantine.toString()).param("c",q.get("correlation_id")).param("h",handoffId.toString()).param("t",q.get("tenant_id")).param("d",q.get("authorization_decision_ref")).update();
+    }
   }
 
   @Transactional
@@ -90,3 +103,4 @@ public class DurablePipelineRepository {
     public StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,sourceObjectId,attemptNo,adapterId,bundleVersion,bundleRef,idempotencyKey,payload,evidence,restartCheckpoint,candidateWatermark,null);}
   }
 }
+
