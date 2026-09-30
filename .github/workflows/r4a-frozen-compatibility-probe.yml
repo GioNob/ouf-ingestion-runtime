@@ -12,8 +12,21 @@ jobs:
       - name: Verify the real consumer and read-only operator gate
         run: |
           bash scripts/install-authorization-sdk.sh
-          mvn -B -ntp -Dtest=FrozenConfigurationProbeTest,PublishedExecutionMapperTest,ManagedTabularAdapterTest,FrozenContractValidatorTest test
+          mvn -B -ntp -Dtest=FrozenConfigurationProbeTest,PublishedExecutionMapperTest,ManagedTabularAdapterTest,FrozenContractValidatorTest package
           python3 -m unittest discover -s tests -p 'test_r4a_frozen_compatibility_probe.py'
+      - name: Verify the packaged JVM entry point without network or database
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          props = pathlib.Path('target/probe-entrypoint.properties')
+          props.write_text('ouf.ingestion.activation.gateway-url=https://gateway.invalid\nouf.ingestion.activation.token-file=/unavailable-token\nouf.ingestion.activation.tenant-id=entrypoint-test\n')
+          jar = next(pathlib.Path('target').glob('ingestion-runtime-*.jar'))
+          result = subprocess.run(['java', '-Dloader.main=it.comune.trieste.ouf.ingestion.FrozenConfigurationProbeMain', '-cp', str(jar), 'org.springframework.boot.loader.launch.PropertiesLauncher', '--properties', str(props)], input='', text=True, capture_output=True, timeout=30)
+          assert result.returncode == 1
+          proof = json.loads(result.stdout)
+          assert proof['status'] == 'BLOCKED' and proof['code'] == 'ING_COMPAT_INPUT_SIZE_INVALID'
+          assert proof['attestationSubmitted'] is False
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:

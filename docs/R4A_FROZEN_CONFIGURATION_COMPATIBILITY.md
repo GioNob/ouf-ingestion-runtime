@@ -46,7 +46,8 @@ live Flyway 14. It creates an isolated worktree and builds a revision-labelled
 image, leaving the old stage manifest, checked-out branches and live container
 intact. A build failure stops the gate; its log is private under `/opt/ouf/r4a-stage`.
 
-The candidate JVM runs non-root with read-only auth/properties mounts, one backend
+The candidate JVM runs non-root with read-only auth/properties mounts, a bounded
+128 MiB disposable `/tmp` for parser/native-library scratch space, one backend
 network, no published ports, dropped Linux capabilities and bounded memory/CPU.
 It receives no database credentials or receipt-signing key. Its only remote
 operations are authenticated Gateway GETs for the asset and Semantic references.
