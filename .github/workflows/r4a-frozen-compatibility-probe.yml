@@ -13,7 +13,7 @@ jobs:
         run: |
           bash scripts/install-authorization-sdk.sh
           mvn -B -ntp -Dtest=FrozenConfigurationProbeTest,PublishedExecutionMapperTest,ManagedTabularAdapterTest,FrozenContractValidatorTest package
-          python3 -m unittest discover -s tests -p 'test_r4a_frozen_compatibility_probe.py'
+          python3 -m unittest discover -s tests -p 'test_r4a_*.py'
       - name: Verify the packaged JVM entry point without network or database
         run: |
           python3 - <<'PY'

@@ -88,6 +88,27 @@ route workflow, with no fallback to direct Semantic or object-storage access.
 
 ## Remaining deployment and attestation gates
 
+### Semantic SERVICE access inventory after the consumer 403
+
+The operator rerun on `dae05e6…` passed transport/build/identity and stopped at
+`ING_ACTIVATION_GATEWAY_403` during the exact-reference Semantic preflight,
+before asset reading. Gateway's `r2b-semantic-reference` binding points to
+`ouf.semantic.read`, whose required scope is absent from the observed Ingestion
+token. Current live route enforcement and effective owner grant remain distinct
+unproved dependencies; a missing scope must not be treated as the only cause.
+
+`scripts/r4a_semantic_access_inventory.py` with its pinned sibling preparer
+reads the existing token reference, ACTIVE policy (read-only SQL) and existing
+kcadm session. It reports scope presence, descriptor actor/scope, grant selector
+counts and exact Keycloak scope/default/optional assignment, without token,
+principal IDs, policy payloads or credentials. Selector counts never assert ALLOW;
+constraints, freshness and owner enforcement still apply. An expired kcadm
+session is reported safely and does not prompt for or renew credentials.
+The inventory performs no HTTP data GET, mutation, build, live switch or POST.
+Three Python tests cover safe policy summarization, expired-session suppression
+and read-only exact-name Keycloak inspection. Scope/binding remediation may be
+prepared after this evidence; policy publication remains a HUMAN THS action.
+
 ### Source identity contract correction after the VPS probe
 
 The operator attempt on `1eb70c4…` passed transport and build but stopped with
