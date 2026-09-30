@@ -41,8 +41,9 @@ class IngestionIamHttpBoundaryTest {
       org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration.class,AuthorizationAutoConfiguration.class})
   @Import({IngestionIamSecurityConfiguration.class, Probe.class})
   static class App {
-    @Bean ServletContextInitializer authorization(){return c->c.setAttribute(ServletAuthorization.RUNTIME,
-        TestAuthorization.runtime("iam-subject","HUMAN",Set.of(CAP)));}
+    @Bean org.springframework.boot.actuate.health.HealthIndicator ingestionReadiness(){
+      return ()->org.springframework.boot.actuate.health.Health.up().build();
+    }
   }
   @RestController static class Probe {
     @GetMapping("/api/trusted-human/v1/ingestion/runs/{id}") Map<String,String> read(HttpServletRequest request){
@@ -52,6 +53,8 @@ class IngestionIamHttpBoundaryTest {
   }
   static KeyPair key(){try{var g=KeyPairGenerator.getInstance("RSA");g.initialize(2048);return g.generateKeyPair();}catch(Exception e){throw new IllegalStateException(e);}}
   @BeforeEach void realVerification(){
+    http.getDispatcherServlet().getServletContext().setAttribute(ServletAuthorization.RUNTIME,
+        TestAuthorization.runtime("iam-subject","HUMAN",Set.of(CAP)));
     var real=NimbusJwtDecoder.withPublicKey((RSAPublicKey)KEY.getPublic()).build();
     real.setJwtValidator(IngestionIamSecurityConfiguration.validators(ISSUER,"expected-audience"));
     when(decoder.decode(anyString())).thenAnswer(i->real.decode(i.getArgument(0,String.class)));
