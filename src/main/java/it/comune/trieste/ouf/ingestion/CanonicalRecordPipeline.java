@@ -16,6 +16,23 @@ public final class CanonicalRecordPipeline {
   public CanonicalRecordPipeline(ObjectMapper json,FrozenContractValidator contracts,DurablePipelineRepository durable,QuarantineService quarantine,RuntimePorts.DataLakePort lake){this(json,contracts,durable,quarantine,lake,Clock.systemUTC());}
   CanonicalRecordPipeline(ObjectMapper json,FrozenContractValidator contracts,DurablePipelineRepository durable,QuarantineService quarantine,RuntimePorts.DataLakePort lake,Clock clock){this.json=json;this.contracts=contracts;this.durable=durable;this.quarantine=quarantine;this.lake=lake;this.clock=clock;}
 
+  /** Executes the production mapping and all frozen output validators without any persistence. */
+  public void validateForCompatibility(Command c){
+    Config cfg=configuration(c.bundle());Instant acquired=clock.instant();
+    String observed=observedAt(c.record(),cfg,acquired),rawRef=sourceRef(c.record());
+    RecordMetadata metadata=metadata(c.record());
+    Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?map(c.record().payload(),cfg.mappings()):Map.of();
+    Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
+    contracts.validate(ENVELOPE,envelope);
+    String rawHash=hash(bytes(c.record().payload())),normalizedHash=hash(bytes(envelope));
+    Map<String,Object> curated=metadata.operation()==Operation.UPSERT?mapped:tombstoneEvidence(c,metadata);
+    String outputHash=hash(bytes(curated));
+    UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID();
+    Map<String,Object> refs=contractRefs(c.bundle(),cfg);
+    contracts.validate(LINEAGE,lineage(c,cfg,metadata,attempt,lineage,handoff,rawRef,rawHash,normalizedHash,outputHash,observed,acquired,refs));
+    contracts.validate(HANDOFF,handoff(c,cfg,metadata,lineage,handoff,rawRef,outputHash,observed,acquired,refs,mapped));
+  }
+
   public Result process(Command c){
     UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID();String rawRef=sourceRef(c.record());
     try{
