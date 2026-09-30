@@ -19,3 +19,9 @@ server:
   port: ${PORT:8080}
   shutdown: graceful
 spring.lifecycle.timeout-per-shutdown-phase: 30s
+
+
+ouf.ingestion.iam:
+  enabled: ${OUF_ING_IAM_ENABLED:false}
+  issuer: ${OUF_ING_IAM_ISSUER:}
+  audience: ${OUF_ING_IAM_AUDIENCE:}
