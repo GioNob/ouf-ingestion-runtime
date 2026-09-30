@@ -39,7 +39,7 @@ only; no run or domain object is created. No source record or token is printed.
 ## Operator preparation
 
 `scripts/r4a_prepare_frozen_compatibility_probe.py` takes an exact candidate commit,
-source, version and expected configuration hash. It reads the frozen configuration
+source, version, expected configuration hash and explicit `--tenant-id`. It reads the frozen configuration
 with a read-only transaction and retains it only in memory/stdin. It verifies the
 old staged worktree, ancestry, remote HEAD, exact migration-file checksums and
 live Flyway 14. It creates an isolated worktree and builds a revision-labelled
@@ -56,11 +56,35 @@ image and evidence remain available. The live image and frozen hash are reread
 after validation. A PASS is saved as `ingestion-compatibility-probe.json` with
 `candidateDeployed=false` and `attestationSubmitted=false`.
 
-The mounted `/run/secrets/ingestion-summary.properties` must contain explicit
-`ouf.ingestion.activation.gateway-url`, `token-file` and `tenant-id`. Unresolved
-placeholders or unavailable credentials fail closed. Secrets remain in existing
-mounts; never paste their values or file contents into chat. Gateway/Authorization
-enforce the existing service access to content and exact Semantic references.
+The first VPS attempt stopped with `ING_COMPAT_TRANSPORT_CONFIG_REQUIRED`:
+all three activation properties were absent from the live summary file. Operator
+diagnostics confirmed an explicit registry URL on the lab Gateway and an existing
+SERVICE token for `ouf-ingestion`, tenant `ouf-lab`, correct issuer/audience,
+TTL 277 seconds at inspection, and scopes `authorization.bundle.read`,
+`ouf.ingestion.configuration.attest`, `ouf.internal.object-storage.read` plus
+OIDC profile/email. This is diagnostic evidence, not a positive consumer proof.
+
+The preparer now checks existing `ouf.authorization.registry-url` and
+`ouf.authorization.registry-token-file` before building. It derives the Gateway
+origin from that configured HTTPS registry URL and uses the supplied tenant.
+Missing/duplicate/nonliteral properties, missing or escaped token files, wrong
+service/client/tenant, short token lifetime or missing object-read scope block
+preparation. JWT claims are decoded only for diagnostics; actual Gateway and
+owner checks authenticate and authorize every consumer GET.
+
+A temporary root-owned, group-10002, mode-0440 file contains only the three
+activation transport properties. It replaces the properties mount **only in the
+disposable probe container**, while the existing auth directory stays read-only.
+No token is copied. The live summary file is never changed, activation/execution
+are never enabled, and no IAM scope/grant/route is created. The temporary file is
+removed after the probe, including errors. This also avoids `docker exec cat`,
+which is unavailable in the distroless runtime. Secrets remain in existing
+mounts; never paste their values or file contents into chat.
+
+The observed token has no explicit Semantic scope. Exact-reference access,
+required route and owner authorization remain unproved; the actual consumer
+GET must succeed. A denial must be corrected through the governed IAM/policy/
+route workflow, with no fallback to direct Semantic or object-storage access.
 
 ## Remaining deployment and attestation gates
 
@@ -86,6 +110,8 @@ attestation and current UDP activation gate may the HUMAN review proceed in THS.
 native/row-ordinal identity, mapping/transform failures, hash/state/adapter-version
 gates, asset integrity failure and Semantic denial. Python tests verify read-only
 SQL, source-ID injection rejection, mount restrictions and evidence binding.
+Ten Python tests now also cover transport derivation without live mutation/token
+copy, wrong principal/tenant/lifetime/scope and missing/escaped token paths.
 The dedicated Java 21 workflow runs these plus existing mapper/adapter/frozen
 contract tests and the packaged JVM entry point. Module CI and VPS execution
 remain separate evidence. The first full module run passed functional/DB and

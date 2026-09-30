@@ -6,6 +6,7 @@ run, ACK, policy change, approval or compatibility-attestation POST is performed
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -13,7 +14,9 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import uuid
+from urllib.parse import urlsplit
 
 BASE = "e3f04f1d8ed47a62cde8b9c7831882c9cea17169"
 BRANCH = "codex/r4a-ingestion-frozen-compatibility-probe"
@@ -57,7 +60,7 @@ def candidate_row(source, version, expected_hash):
     return row
 
 
-def probe_mounts(live):
+def probe_mounts(live, transport=None):
     if (not live["State"]["Running"] or live["Config"]["User"] != "10002:10002"
             or live["HostConfig"]["NetworkMode"] != "ouf-backend"
             or set(live["NetworkSettings"]["Networks"]) != {"ouf-backend"}):
@@ -68,8 +71,76 @@ def probe_mounts(live):
         m = found.get(target)
         if not m or m["Type"] != "bind" or any(x in m["Source"] for x in (",", "\n", "\r")):
             raise RuntimeError("PROBE_TRANSPORT_MOUNT_MISSING")
-        mounts.extend(["--mount", f"type=bind,src={m['Source']},dst={target},readonly"])
+        source = str(transport) if target == PROPERTIES and transport is not None else m["Source"]
+        if any(x in source for x in (",", "\n", "\r")):
+            raise RuntimeError("PROBE_TRANSPORT_MOUNT_MISSING")
+        mounts.extend(["--mount", f"type=bind,src={source},dst={target},readonly"])
     return mounts
+
+
+def literal_property(text, key):
+    values = re.findall(r"^[ \t]*" + re.escape(key) + r"[ \t]*[=:][ \t]*(.*)$", text, re.MULTILINE)
+    if len(values) != 1:
+        raise RuntimeError("ING_COMPAT_TRANSPORT_PROPERTY_MISSING_OR_DUPLICATED")
+    value = values[0].strip()
+    if not value or any(x in value for x in ("${", "\\", "\n", "\r")):
+        raise RuntimeError("ING_COMPAT_TRANSPORT_PROPERTY_NOT_LITERAL")
+    return value
+
+
+def transport_settings(live, tenant):
+    """Use existing references, never a distroless exec/cat or a new credential.
+
+    Decoded claims are diagnostic checks, not authentication; Gateway still
+    validates the bearer and owner authorization on every actual consumer GET.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", tenant):
+        raise RuntimeError("ING_COMPAT_TENANT_INVALID")
+    found = {m["Destination"]: m for m in live["Mounts"]}
+    text = Path(found[PROPERTIES]["Source"]).read_text()
+    registry = urlsplit(literal_property(text, "ouf.authorization.registry-url"))
+    if (registry.scheme != "https" or not registry.hostname or registry.username is not None
+            or registry.password is not None or registry.query or registry.fragment):
+        raise RuntimeError("ING_COMPAT_REGISTRY_URL_INVALID")
+    token_path = literal_property(text, "ouf.authorization.registry-token-file")
+    relative = Path(token_path).relative_to(AUTH)
+    if not relative.parts or ".." in relative.parts:
+        raise RuntimeError("ING_COMPAT_TOKEN_PATH_INVALID")
+    directory = Path(found[AUTH]["Source"]).resolve()
+    host = directory.joinpath(relative).resolve()
+    if not host.is_relative_to(directory) or not host.is_file():
+        raise RuntimeError("ING_COMPAT_TOKEN_FILE_MISSING_OR_OUTSIDE_MOUNT")
+    with host.open("rb") as stream:
+        raw = stream.read(16385)
+    if len(raw) > 16384:
+        raise RuntimeError("ING_COMPAT_TOKEN_INVALID")
+    token = raw.decode().strip()
+    if token.count(".") != 2 or any(x.isspace() for x in token):
+        raise RuntimeError("ING_COMPAT_TOKEN_INVALID")
+    part = token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    if (claims.get("ouf_actor_type") != "SERVICE" or claims.get("tenant_id") != tenant
+            or (claims.get("client_id") or claims.get("azp")) != "ouf-ingestion"
+            or type(claims.get("exp")) is not int or claims["exp"] - time.time() < 60
+            or "ouf.internal.object-storage.read" not in str(claims.get("scope", "")).split()):
+        raise RuntimeError("ING_COMPAT_TOKEN_DIAGNOSTIC_MISMATCH")
+    return {"ouf.ingestion.activation.gateway-url": registry.scheme + "://" + registry.netloc,
+            "ouf.ingestion.activation.token-file": token_path,
+            "ouf.ingestion.activation.tenant-id": tenant}
+
+
+def write_transport(settings):
+    fd, name = tempfile.mkstemp(prefix="ingestion-probe-transport-", suffix=".properties", dir=ROOT)
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "w") as output:
+            os.fchown(output.fileno(), 0, 10002)
+            os.fchmod(output.fileno(), 0o440)
+            output.write("".join(key + "=" + value + "\n" for key, value in settings.items()))
+        return path
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def validate_proof(proof, candidate):
@@ -91,6 +162,8 @@ def main(args):
     os.umask(0o077)
     live = inspect("ouf-ingestion")
     mounts = probe_mounts(live)
+    transport_settings(live, args.tenant_id)
+    print("R4A_ING_COMPAT_TRANSPORT=PASS PREBUILD=true LIVE_CONFIG_CHANGED=false", flush=True)
     stage = json.loads(MANIFEST.read_text())
     old = stage["modules"]["ingestion"]
     if stage.get("schema") != "ouf.r4a.identity-images.v1" or old["commit"] != BASE:
@@ -101,6 +174,10 @@ def main(args):
     if run(["git", "-C", str(base_worktree), "status", "--porcelain"]):
         raise RuntimeError("BASE_WORKTREE_DIRTY")
     candidate = candidate_row(args.source, args.version, args.expected_hash)
+    # Refresh the bounded diagnostic after the build; the token rotates in its
+    # existing directory mount. Never copy the bearer into the transport file.
+    transport = write_transport(transport_settings(current, args.tenant_id))
+    mounts = probe_mounts(current, transport)
     run(["git", "-C", str(base_worktree), "fetch", "--no-tags", "origin", BRANCH], timeout=180)
     if run(["git", "-C", str(base_worktree), "rev-parse", "FETCH_HEAD"]) != args.revision:
         raise RuntimeError("REMOTE_HEAD_DRIFT")
@@ -152,8 +229,11 @@ def main(args):
                                    text=True, timeout=120)
     finally:
         # Only this invocation's disposable container may be removed, including on timeout.
-        subprocess.run(["docker", "rm", "--force", probe_name], capture_output=True,
-                       text=True, timeout=30)
+        try:
+            subprocess.run(["docker", "rm", "--force", probe_name], capture_output=True,
+                           text=True, timeout=30)
+        finally:
+            transport.unlink(missing_ok=True)
     try:
         proof = json.loads(completed.stdout)
     except ValueError:
@@ -181,7 +261,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for option in ("revision", "source", "version", "expected-hash"):
+    for option in ("revision", "source", "version", "expected-hash", "tenant-id"):
         parser.add_argument("--" + option, required=True)
     arguments = parser.parse_args()
     try:
