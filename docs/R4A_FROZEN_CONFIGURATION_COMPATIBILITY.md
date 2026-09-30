@@ -87,4 +87,9 @@ native/row-ordinal identity, mapping/transform failures, hash/state/adapter-vers
 gates, asset integrity failure and Semantic denial. Python tests verify read-only
 SQL, source-ID injection rejection, mount restrictions and evidence binding.
 The dedicated Java 21 workflow runs these plus existing mapper/adapter/frozen
-contract tests. Module CI and VPS execution remain separate evidence.
+contract tests and the packaged JVM entry point. Module CI and VPS execution
+remain separate evidence. The first full module run passed functional/DB and
+restore checks but Trivy blocked the inherited Jackson Databind 2.21.4 for
+CVE-2026-68497 (HIGH, fixed in 2.21.6 on this line). The Jackson BOM is advanced
+to 2.21.6; the existing vulnerability threshold remains unchanged. A green scan
+and all regressions on the updated commit are required before rollout.
