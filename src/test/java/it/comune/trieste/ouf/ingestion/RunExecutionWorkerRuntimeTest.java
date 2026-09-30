@@ -52,7 +52,7 @@ import org.springframework.transaction.PlatformTransactionManager;
     UUID failed=sql.sql("select attempt_id from ouf_ingestion.processing_attempt where run_id=:r").param("r",run).query(UUID.class).single();
     UUID q=sql.sql("select quarantine_id from ouf_ingestion.ing_quarantine where run_id=:r").param("r",run).query(UUID.class).single();
     assertThatThrownBy(()->controls.resume(run,0,actor,"corr-unauthorized-retry")).hasMessage("ING_QUARANTINE_RETRY_REQUIRED");
-    assertThat(state.run(run)).containsEntry("state","PAUSED").containsEntry("control_version",0L);
+    assertThat(controls.view(run,actor)).containsEntry("state","PAUSED").containsEntry("control_version",0L);
     quarantine.markRetryReady(q,0,actor,"corr-ready");controls.resume(run,0,actor,"corr-resume");
     RunExecutionWorker recovered=new RunExecutionWorker(execution,b->new OneRecordAdapter(),new CanonicalRecordPipeline(json,validator,durable,quarantine,new RecordingLake()),schemas,state);
     assertThat(recovered.executeOne("retry-worker")).contains(run);
