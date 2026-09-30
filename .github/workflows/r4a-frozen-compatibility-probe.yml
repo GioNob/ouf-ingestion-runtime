@@ -1,0 +1,22 @@
+name: R4a frozen configuration consumer probe
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  consumer-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Verify the real consumer and read-only operator gate
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -Dtest=FrozenConfigurationProbeTest,PublishedExecutionMapperTest,ManagedTabularAdapterTest,FrozenContractValidatorTest test
+          python3 -m unittest discover -s tests -p 'test_r4a_frozen_compatibility_probe.py'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r4a-frozen-consumer-${{ github.run_id }}
+          path: target/surefire-reports/
+          retention-days: 30
