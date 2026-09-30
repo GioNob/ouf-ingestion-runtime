@@ -47,9 +47,14 @@ public final class FrozenConfigurationProbe {
     var identity=PublishedActivation.map(configuration,"sourceObjectIdentityPolicy");
     String strategy=PublishedActivation.text(identity,"strategy");
     Object fields=identity.get("sourceFields");
-    if("ASSET_AND_ROW_ORDINAL".equals(strategy)){
-      if(!List.of("$managedRowOrdinal").equals(fields)||!"managed-tabular-v1".equals(adapter.adapterId()))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
-    }else if(!"NATIVE_KEY".equals(strategy)||!(fields instanceof List<?> keys)||keys.isEmpty()||keys.contains("$managedRowOrdinal"))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
+    if("MANAGED_DETERMINISTIC".equals(strategy)){
+      var runtime=PublishedActivation.map(PublishedActivation.map(configuration,"extractionProfile"),"runtime");
+      if(!List.of("$managedRowOrdinal").equals(fields)||!"managed-tabular-v1".equals(adapter.adapterId())
+          ||!"normalization://managed-file/asset-row-ordinal-v1".equals(identity.get("normalizationRuleRef"))
+          ||!"ASSET_AND_ROW_ORDINAL".equals(runtime.get("rowIdentityBasis")))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
+    }else if(!Set.of("NATIVE_KEY","COMPOSITE_NATIVE_KEY").contains(strategy)||!(fields instanceof List<?> keys)
+        ||keys.isEmpty()||keys.stream().anyMatch(x->!(x instanceof String s)||s.isBlank()||s.startsWith("$"))
+        ||new HashSet<>(keys).size()!=keys.size()||("NATIVE_KEY".equals(strategy)?keys.size()!=1:keys.size()<2))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
     Object rawExpected=bundle.configuration().get("expectedFieldNames");
     if(!(rawExpected instanceof List<?> expected)||expected.stream().anyMatch(x->!(x instanceof String s)||s.isBlank())||new HashSet<>(expected).size()!=expected.size())throw invalid("ING_EXPECTED_FIELDS_INVALID");
     // Exact historical identities are resolved through the same Gateway port used by run preflight.

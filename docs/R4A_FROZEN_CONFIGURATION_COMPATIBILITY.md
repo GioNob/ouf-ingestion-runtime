@@ -88,6 +88,28 @@ route workflow, with no fallback to direct Semantic or object-storage access.
 
 ## Remaining deployment and attestation gates
 
+### Source identity contract correction after the VPS probe
+
+The operator attempt on `1eb70c4…` passed transport and build but stopped with
+`ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED`, before Semantic and asset GETs.
+The original probe mistook the runtime `rowIdentityBasis=ASSET_AND_ROW_ORDINAL`
+for the policy strategy. The owner contract admits `NATIVE_KEY`,
+`COMPOSITE_NATIVE_KEY` and `MANAGED_DETERMINISTIC`; Onboarding's
+`ManagedFileService` emits the last strategy with `sourceFields=["$managedRowOrdinal"]`,
+`normalizationRuleRef=normalization://managed-file/asset-row-ordinal-v1` and the
+runtime row-ordinal basis. The probe now checks this exact combination for the
+tabular adapter. It also supports native and composite native strategies with
+valid, distinct nonsynthetic fields and their respective key cardinalities.
+It rejects the noncontract strategy `ASSET_AND_ROW_ORDINAL`, unknown normalization
+and inconsistent runtime basis. No frozen configuration, hash or owner policy is
+modified. Source provenance identity remains distinct from UrbanObjectId.
+
+Java regression fixtures now use the exact owner representation and cover
+composite native identity plus negative strategy, normalization, basis and
+cardinality cases. These run in Java 21 CI with the production adapter/pipeline.
+Until that CI and the operator rerun pass, no consumer proof or attestation is
+claimed. The untested Gateway/Semantic access gate remains open.
+
 After the candidate proof, prepare a verified DB backup, retained old container,
 controlled image switch and readiness smoke. No schema migration is added here.
 Repeat the consumer proof against the actual deployed immutable image before

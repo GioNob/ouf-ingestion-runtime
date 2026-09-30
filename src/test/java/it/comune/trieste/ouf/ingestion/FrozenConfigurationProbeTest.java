@@ -54,8 +54,35 @@ class FrozenConfigurationProbeTest {
     assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
   }
   @Test void rowOrdinalIdentityUsesTheProductionManagedIdentity(){
-    var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",Map.of("strategy","ASSET_AND_ROW_ORDINAL","sourceFields",List.of("$managedRowOrdinal")));rehash(c);
+    var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",Map.of("strategy","MANAGED_DETERMINISTIC","sourceFields",List.of("$managedRowOrdinal"),"normalizationRuleRef","normalization://managed-file/asset-row-ordinal-v1"));
+    runtime(c).put("rowIdentityBasis","ASSET_AND_ROW_ORDINAL");rehash(c);
     assertThat(probe().probe(c)).containsEntry("validatedRows",2L);
+  }
+  @Test void rowIdentityBasisIsNotAnIdentityStrategy(){
+    var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",Map.of("strategy","ASSET_AND_ROW_ORDINAL","sourceFields",List.of("$managedRowOrdinal")));rehash(c);
+    assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
+    assertThat(reads).isZero();
+  }
+  @Test void managedDeterministicIdentityRequiresItsApprovedNormalizationAndBasis(){
+    for(String rule:List.of("normalization://managed-file/unknown-v1","normalization://managed-file/asset-row-ordinal-v1")){
+      var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",Map.of("strategy","MANAGED_DETERMINISTIC","sourceFields",List.of("$managedRowOrdinal"),"normalizationRuleRef",rule));
+      runtime(c).put("rowIdentityBasis",rule.endsWith("unknown-v1")?"ASSET_AND_ROW_ORDINAL":"APPROVED_SOURCE_FIELDS");rehash(c);
+      assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
+    }
+    assertThat(reads).isZero();
+  }
+  @Test void compositeNativeKeysUseTheProductionManagedIdentity(){
+    var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",Map.of("strategy","COMPOSITE_NATIVE_KEY","sourceFields",List.of("id","name")));rehash(c);
+    assertThat(probe().probe(c)).containsEntry("validatedRows",2L);
+  }
+  @Test void nativeStrategiesRejectWrongCardinalityAndSyntheticFields(){
+    for(var policy:List.of(Map.of("strategy","NATIVE_KEY","sourceFields",List.of("id","name")),
+        Map.of("strategy","COMPOSITE_NATIVE_KEY","sourceFields",List.of("id")),
+        Map.of("strategy","NATIVE_KEY","sourceFields",List.of("$managedRowOrdinal")))){
+      var c=candidate();configuration(c).put("sourceObjectIdentityPolicy",policy);rehash(c);
+      assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
+    }
+    assertThat(reads).isZero();
   }
   @Test void lateInvalidRowFailsRatherThanSamplingTheFirstRow(){
     byte[] bad="id;name\r\n1;First\r\n1;Second\r\n".getBytes(StandardCharsets.UTF_8);
