@@ -174,10 +174,6 @@ def main(args):
     if run(["git", "-C", str(base_worktree), "status", "--porcelain"]):
         raise RuntimeError("BASE_WORKTREE_DIRTY")
     candidate = candidate_row(args.source, args.version, args.expected_hash)
-    # Refresh the bounded diagnostic after the build; the token rotates in its
-    # existing directory mount. Never copy the bearer into the transport file.
-    transport = write_transport(transport_settings(current, args.tenant_id))
-    mounts = probe_mounts(current, transport)
     run(["git", "-C", str(base_worktree), "fetch", "--no-tags", "origin", BRANCH], timeout=180)
     if run(["git", "-C", str(base_worktree), "rev-parse", "FETCH_HEAD"]) != args.revision:
         raise RuntimeError("REMOTE_HEAD_DRIFT")
@@ -213,6 +209,10 @@ def main(args):
         raise RuntimeError("LIVE_CHANGED_DURING_PREPARE")
     probe_mounts(current)
     candidate = candidate_row(args.source, args.version, args.expected_hash)
+    # Refresh after the build and after the current live snapshot is verified.
+    # Never copy the bearer into the transport file.
+    transport = write_transport(transport_settings(current, args.tenant_id))
+    mounts = probe_mounts(current, transport)
     probe_name = "ouf-ingestion-compatibility-probe-" + uuid.uuid4().hex
     command = ["docker", "run", "--rm", "--name", probe_name, "--interactive", "--network", "ouf-backend",
                "--user", "10002:10002", "--read-only", "--cap-drop", "ALL",

@@ -110,8 +110,15 @@ attestation and current UDP activation gate may the HUMAN review proceed in THS.
 native/row-ordinal identity, mapping/transform failures, hash/state/adapter-version
 gates, asset integrity failure and Semantic denial. Python tests verify read-only
 SQL, source-ID injection rejection, mount restrictions and evidence binding.
-Ten Python tests now also cover transport derivation without live mutation/token
+Twelve Python tests now also cover transport derivation without live mutation/token
 copy, wrong principal/tenant/lifetime/scope and missing/escaped token paths.
+The first transport correction (`160e339…`) passed its CI but the operator
+attempt exposed an orchestration bug: `current` was used before its live snapshot
+assignment. It stopped before build, transport-file creation or consumer GETs.
+Transport creation now follows the post-build live-image and frozen-version
+checks. Two full-preparer regression tests replace only external VPS operations:
+they cover the build/snapshot/transport/probe order, successful proof persistence,
+and consumer denial with temporary-file/container cleanup and no positive proof.
 The dedicated Java 21 workflow runs these plus existing mapper/adapter/frozen
 contract tests and the packaged JVM entry point. Module CI and VPS execution
 remain separate evidence. The first full module run passed functional/DB and

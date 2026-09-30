@@ -1,10 +1,12 @@
 import importlib.util
 import base64
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +17,83 @@ spec.loader.exec_module(probe)
 
 
 class FrozenProbeGateTests(unittest.TestCase):
+    def exercise_preparation(self, failed_probe=False):
+        """Run the whole preparer with only external VPS operations replaced."""
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            root = Path(directory)
+            revision = "a" * 40
+            candidate = {"onboardingVersionId": "version", "configurationHash": "sha256:" + "b" * 64}
+            args = SimpleNamespace(revision=revision, source="source", version="version",
+                                   expected_hash=candidate["configurationHash"], tenant_id="tenant-test")
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"schema": "ouf.r4a.identity-images.v1",
+                "modules": {"ingestion": {"commit": probe.BASE, "worktree": str(root / "base")}}}))
+            live = self.live()
+            live.update({"Id": "live-container", "Image": "live-image"})
+            image = {"Id": "candidate-image", "Config": {"User": "10002:10002",
+                     "Labels": {"org.opencontainers.image.revision": revision}}}
+            events = []
+            transport = root / "probe.properties"
+
+            def run(command, **kwargs):
+                if command[0] == "git":
+                    if command[-2:] == ["rev-parse", "HEAD"]: return probe.BASE
+                    if command[-2:] == ["rev-parse", "FETCH_HEAD"]: return revision
+                    return ""
+                return "14"
+
+            def external(command, **kwargs):
+                operation = command[1]
+                events.append(operation)
+                if operation == "run":
+                    self.assertTrue(transport.exists())
+                    self.assertIn("src=" + str(transport) + ",dst=" + probe.PROPERTIES + ",readonly",
+                                  " ".join(command))
+                    proof = {"schema": "ouf.ingestion.compatibility-probe.v1", "status": "PASS",
+                             **candidate, "attestationSubmitted": False, "validatedRows": 8}
+                    if failed_probe: proof = {"code": "ING_ACTIVATION_GATEWAY_403"}
+                    return SimpleNamespace(stdout=json.dumps(proof), returncode=int(failed_probe))
+                return SimpleNamespace(returncode=0)
+
+            def settings(snapshot, tenant):
+                self.assertIs(snapshot, live)
+                events.append("settings")
+                return {"key": "value"}
+
+            def write(settings):
+                self.assertIn("build", events)
+                events.append("write")
+                transport.write_text("key=value\n")
+                return transport
+
+            replacements = {"ROOT": root, "MANIFEST": manifest, "run": run,
+                "inspect": lambda name, kind="container": image if kind == "image" else live,
+                "migration_hashes": lambda path: {"V14.sql": "same"},
+                "candidate_row": lambda *args: candidate, "transport_settings": settings,
+                "write_transport": write}
+            for name, replacement in replacements.items():
+                stack.enter_context(patch.object(probe, name, replacement))
+            stack.enter_context(patch.object(probe.os, "geteuid", return_value=0))
+            stack.enter_context(patch.object(probe.os, "umask"))
+            stack.enter_context(patch.object(probe.subprocess, "run", side_effect=external))
+            if failed_probe:
+                with self.assertRaisesRegex(RuntimeError, "ING_ACTIVATION_GATEWAY_403"):
+                    probe.main(args)
+                self.assertFalse((root / "ingestion-compatibility-probe.json").exists())
+            else:
+                probe.main(args)
+                proof = json.loads((root / "ingestion-compatibility-probe.json").read_text())
+                self.assertFalse(proof["candidateDeployed"])
+                self.assertFalse(proof["attestationSubmitted"])
+            self.assertEqual(events, ["settings", "build", "settings", "write", "run", "rm"])
+            self.assertFalse(transport.exists())
+
+    def test_complete_preparation_refreshes_transport_only_after_build_and_snapshot(self):
+        self.exercise_preparation()
+
+    def test_complete_preparation_cleans_transport_after_consumer_denial(self):
+        self.exercise_preparation(failed_probe=True)
+
     def transport_fixture(self, root, **overrides):
         root = Path(root)
         auth = root / "auth"
