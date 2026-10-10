@@ -17,7 +17,7 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
 import org.springframework.context.annotation.*;
@@ -41,8 +41,8 @@ class IngestionIamHttpBoundaryTest {
       org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration.class,AuthorizationAutoConfiguration.class})
   @Import({IngestionIamSecurityConfiguration.class, Probe.class})
   static class App {
-    @Bean org.springframework.boot.actuate.health.HealthIndicator ingestionReadiness(){
-      return ()->org.springframework.boot.actuate.health.Health.up().build();
+    @Bean org.springframework.boot.health.contributor.HealthIndicator ingestionReadiness(){
+      return ()->org.springframework.boot.health.contributor.Health.up().build();
     }
   }
   @RestController static class Probe {

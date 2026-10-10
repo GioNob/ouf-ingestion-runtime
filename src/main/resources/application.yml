@@ -1,4 +1,5 @@
 spring:
+  http.converters.preferred-json-mapper: jackson2
   application.name: ouf-ingestion-runtime
   datasource:
     url: ${OUF_ING_DB_URL}

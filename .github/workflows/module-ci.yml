@@ -86,7 +86,7 @@ jobs:
         run: docker build -t ouf-ingestion:${{ github.sha }} .
       - name: Scan image and enforce vulnerability policy
         uses: aquasecurity/trivy-action@v0.36.0
-        with: {image-ref: 'ouf-ingestion:${{ github.sha }}', format: json, output: target/trivy-image.json, severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1'}
+        with: {image-ref: 'ouf-ingestion:${{ github.sha }}', format: json, output: target/trivy-image.json, severity: 'HIGH,CRITICAL', ignore-unfixed: false, exit-code: '1'}
       - name: Validate deployment chart
         run: |
           docker run --rm -v "$PWD:/work" -w /work alpine/helm:3.19.0 lint deploy/helm/ouf-ingestion
