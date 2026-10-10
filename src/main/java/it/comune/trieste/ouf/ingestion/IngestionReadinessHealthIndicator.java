@@ -1,6 +1,6 @@
 package it.comune.trieste.ouf.ingestion;
 
-import org.springframework.boot.actuate.health.*;
+import org.springframework.boot.health.contributor.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
