@@ -42,7 +42,7 @@ jobs:
           unzip -j target/ingestion-runtime-*.jar 'BOOT-INF/lib/*' -d target/runtime-image-libs >/dev/null
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m \
             -v "$PWD/target/test-classes:/probe:ro" \
             -v "$PWD/target/runtime-image-libs:/dependencies:ro" \
             --entrypoint java ouf-ingestion:${{ github.sha }} \
