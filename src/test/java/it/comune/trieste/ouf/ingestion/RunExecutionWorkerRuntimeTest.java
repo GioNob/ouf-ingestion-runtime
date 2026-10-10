@@ -4,15 +4,18 @@ import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.*;
 import java.util.*;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
 
-@SpringBootTest class RunExecutionWorkerRuntimeTest {
+@SpringBootTest(properties="ouf.ingestion.execution.initial-delay-ms=3600000") class RunExecutionWorkerRuntimeTest {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
   @Autowired RunStateRepository state;@Autowired RunExecutionRepository execution;@Autowired DurablePipelineRepository durable;@Autowired QuarantineService quarantine;@Autowired FrozenContractValidator validator;@Autowired SchemaSurveillanceService schemas;@Autowired ObjectMapper json;@Autowired JdbcClient sql;
+
+  @BeforeEach void cleanRuns(){sql.sql("truncate table ouf_ingestion.ing_run cascade").update();}
 
   @Test void pinnedSnapshotRunsThroughAdapterPipelineDrainingAndAckCompletion(){
     String source="source-"+UUID.randomUUID();ExecutionBundle bundle=bundle(source);var claim=new RunStateRepository.ScheduleClaim(UUID.randomUUID(),"tenant-1",source,300,"scheduler");UUID run=state.createPreflightRun(claim,bundle,"corr-worker");state.preflightSucceeded(run);sql.sql("update ouf_ingestion.ing_run set created_at='2000-01-01T00:00:00Z' where run_id=:r").param("r",run).update();
