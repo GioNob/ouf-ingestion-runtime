@@ -1,0 +1,25 @@
+{
+  "source": "8b908554314617298242eb2ae8312f734f55e817",
+  "baseline": "163c167d09b8371ff7a62ce7068e9d485b6969b7",
+  "migrationCount": 14,
+  "status": "ALL_EIGHT_WORKFLOWS_PASS",
+  "tests": 118,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "nativeSqliteAndXlsxRealImageProbe": "PASS",
+  "workflowRuns": [
+    38069049972,
+    38069050091,
+    38069050049,
+    38069049963,
+    38069049969,
+    38069050074,
+    38069049961,
+    38069049935
+  ],
+  "imageId": "sha256:d6fd13e5d375d823dc6e54065bfd7688765b9c69049ea16ee0acb558abf27d1a",
+  "freshHighCriticalFindings": 0,
+  "failedImageScanRetained": true,
+  "deploymentAuthorized": false
+}

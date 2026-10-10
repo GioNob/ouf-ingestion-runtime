@@ -13,6 +13,13 @@ public class RunExecutionRepository {
   public RunExecutionRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
   @Transactional public Optional<Claim> claim(String worker,Duration lease){String pressure=sql.sql("select ouf_ingestion.refresh_pressure_state()").query(String.class).single();return sql.sql("with candidate as (select p.run_id,p.partition_key from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where r.state='RUNNING' and p.state='RUNNING' and (p.lease_until is null or p.lease_until<transaction_timestamp()) and (:pressure not in ('HARD_PRESSURE','RECOVERY') or r.phase='DELTA') order by case when r.phase='DELTA' then 0 else 1 end,r.created_at,p.partition_key for update of p skip locked limit 1) update ouf_ingestion.ing_partition p set lease_owner=:w,lease_until=transaction_timestamp()+(:ms*interval '1 millisecond'),lease_generation=lease_generation+1 from candidate c where p.run_id=c.run_id and p.partition_key=c.partition_key returning p.run_id,p.partition_key,p.checkpoint_json::text,p.lease_generation")
     .param("pressure",pressure).param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new Claim(rs.getObject(1,UUID.class),rs.getString(2),decodeMap(rs.getString(3)),rs.getLong(4),worker)).optional();}
+  /** The owned partition serializes records; preserve every earlier failed attempt. */
+  public int nextAttemptNumber(Claim claim,String sourceObjectId){
+    long next=sql.sql("select coalesce((select max(a.attempt_no)::bigint from ouf_ingestion.processing_attempt a where a.run_id=p.run_id and a.source_object_id=:o),0)+1 from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where p.run_id=:r and p.partition_key=:p and p.lease_owner=:w and p.lease_generation=:g and p.lease_until>transaction_timestamp() and p.state='RUNNING' and r.state='RUNNING'")
+      .param("o",sourceObjectId).param("r",claim.runId()).param("p",claim.partitionKey()).param("w",claim.worker()).param("g",claim.generation()).query(Long.class).optional().orElseThrow(()->new IllegalStateException("ING_PARTITION_LEASE_LOST"));
+    if(next<1||next>Integer.MAX_VALUE)throw new IllegalStateException("ING_ATTEMPT_LIMIT_REACHED");
+    return (int)next;
+  }
   public ExecutionBundle bundle(UUID run){String raw=sql.sql("select snapshot_json::text from ouf_ingestion.runtime_configuration_snapshot where run_id=:r").param("r",run).query(String.class).single();try{return json.readValue(raw,ExecutionBundle.class);}catch(Exception e){throw new IllegalStateException("ING_BUNDLE_SNAPSHOT_INVALID",e);}}
   public RunContext context(UUID run){return sql.sql("select source_id,correlation_id from ouf_ingestion.ing_run where run_id=:r").param("r",run).query((rs,n)->new RunContext(rs.getString(1),rs.getString(2))).single();}
   @Transactional public void release(Claim c){owned(c,"update ouf_ingestion.ing_partition set lease_owner=null,lease_until=null where run_id=:r and partition_key=:p and lease_owner=:w and lease_generation=:g and lease_until>transaction_timestamp()");}
@@ -27,3 +34,4 @@ public class RunExecutionRepository {
   public record Claim(UUID runId,String partitionKey,Map<String,Object> checkpoint,long generation,String worker){}
   public record RunContext(String sourceId,String correlationId){}
 }
+

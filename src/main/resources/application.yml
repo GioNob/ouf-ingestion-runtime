@@ -1,4 +1,5 @@
 spring:
+  http.converters.preferred-json-mapper: jackson2
   application.name: ouf-ingestion-runtime
   datasource:
     url: ${OUF_ING_DB_URL}
@@ -20,5 +21,8 @@ server:
   shutdown: graceful
 spring.lifecycle.timeout-per-shutdown-phase: 30s
 
-# Preserve JSON 2 serialization while qualifying the supported Spring line.
-spring.http.converters.preferred-json-mapper: jackson2
+
+ouf.ingestion.iam:
+  enabled: ${OUF_ING_IAM_ENABLED:false}
+  issuer: ${OUF_ING_IAM_ISSUER:}
+  audience: ${OUF_ING_IAM_AUDIENCE:}

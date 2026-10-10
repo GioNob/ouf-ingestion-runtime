@@ -27,6 +27,19 @@ class ManagedTabularAdapterTest {
     }
   }
 
+  @Test void semicolonCsvWithBomAndQuotedDelimiterKeepsTheApprovedFields(){
+    byte[] bytes="\uFEFFnome_teatro;precisione_coordinate\r\nTeatro Miela;\"edificio; circa 10 m\"\r\n"
+        .getBytes(StandardCharsets.UTF_8);
+    var b=bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("csvDelimiter",";","identityFields",List.of()));
+    try(var cursor=adapter(bytes).open(b,new AdapterSpi.Checkpoint(Map.of()))){
+      var record=cursor.next().orElseThrow();
+      assertThat(record.payload()).containsEntry("nome_teatro","Teatro Miela")
+          .containsEntry("precisione_coordinate","edificio; circa 10 m");
+      assertThat(record.payload()).doesNotContainKey("\uFEFFnome_teatro");
+      assertThat(cursor.next()).isEmpty();
+    }
+  }
+
   @Test void keyedIdentitySurvivesRowReordering() throws Exception {
     byte[] one="id,name\nA,Alpha\nB,Beta\n".getBytes(StandardCharsets.UTF_8);
     byte[] two="id,name\nB,Beta\nA,Alpha\n".getBytes(StandardCharsets.UTF_8);

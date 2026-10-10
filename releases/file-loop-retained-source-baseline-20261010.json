@@ -1,0 +1,78 @@
+{
+  "schema": "ouf.source-continuity-baseline.v1",
+  "scope": "HISTORICAL_SOURCE_INVENTORY_NOT_CURRENT_TARGET_OR_DEPLOYMENT_AUTHORITY",
+  "modules": {
+    "ouf-udp-object-resolution": {
+      "sourceCommit": "83249a897eb4add4289b5181b3299f48ea4c0f99",
+      "gitTreeSha": "83249a897eb4add4289b5181b3299f48ea4c0f99",
+      "migrationBlobs": {
+        "src/main/resources/db/migration/V10__lake_object_lifecycle.sql": "02ce975d0868523550fef24e191604b99b0a54fa",
+        "src/main/resources/db/migration/V11__handoff_raw_lake_reference.sql": "7a6117f2c733f1b83a9ba7f868e01cc21aa4557e",
+        "src/main/resources/db/migration/V12__lake_maintenance_scheduler.sql": "b69244f632646b71709d51ba151c50db6e75050e",
+        "src/main/resources/db/migration/V13__lake_shadow_rebuild.sql": "e118efc0acae15ce224b9bea66a7e21546b903e0",
+        "src/main/resources/db/migration/V14__shadow_rebuild_fencing_and_rollback.sql": "fa260d1ced51aefd65c39fa1a8fc14a3fba2643b",
+        "src/main/resources/db/migration/V15__historical_reproduce.sql": "e87025dae8793b3b66a40ffd0af2e4cc0a6f77e8",
+        "src/main/resources/db/migration/V16__materialization_reference_integrity.sql": "320d626fe7bd0dca348bddf9df60d365da028488",
+        "src/main/resources/db/migration/V17__selective_bitemporal_delta_history.sql": "037a61dbfa80ea536cf698535986fc5097d5c216",
+        "src/main/resources/db/migration/V18__capability_retry_guard.sql": "dc731138fdc6e799e2c37287c5ba17017d684bb0",
+        "src/main/resources/db/migration/V19__source_raw_handoff_reference.sql": "15e5c00bf070b5744840b7ba643542b626f94ee7",
+        "src/main/resources/db/migration/V1__handoff_and_resolution_core.sql": "4c7528f1bfb2bce710c8203f8c10edd0432146db",
+        "src/main/resources/db/migration/V20__governed_coordinate_transformations.sql": "878eb089f0dbec97b9a1e49173bf1ea825713f4a",
+        "src/main/resources/db/migration/V21__pinned_relationship_reconciliation.sql": "abeaf7b9d93a1df80c28cb96f7f3dc6fa58f76cb",
+        "src/main/resources/db/migration/V22__weighted_identity_evidence.sql": "94bde780313624467333ff87f165cd7326715096",
+        "src/main/resources/db/migration/V23__geometry_authority_conflict.sql": "419bdeac944f4eea01aca01762be8e63f12a77cf",
+        "src/main/resources/db/migration/V24__human_geometry_decisions.sql": "7be27237d4a8314832e475bc731f804db099091a",
+        "src/main/resources/db/migration/V25__human_property_decisions.sql": "a8e343e3fc98824f95c2720613053e7f6fba4376",
+        "src/main/resources/db/migration/V26__geometry_roles_and_validity.sql": "bec04095f79d4126d8d158fa59461b1846f57833",
+        "src/main/resources/db/migration/V27__identity_scope_serialization.sql": "10c9ddbe5cfb0a9c34a62f3120d01fb5cc0598d9",
+        "src/main/resources/db/migration/V28__identity_value_lookup.sql": "999b6ed054681c2db89e69b30adc2623be448f56",
+        "src/main/resources/db/migration/V29__identity_field_shape_catalog.sql": "0a861aeda2f285b3a1198471774af78cd9cb18b2",
+        "src/main/resources/db/migration/V2__canonical_revision_authority.sql": "48fe86e803e6e2e5ac6487f53ea1e265ac5a75e5",
+        "src/main/resources/db/migration/V30__resolution_review_package.sql": "2ef5aa8a7e3d340909ea4428823612c85737a9a2",
+        "src/main/resources/db/migration/V31__serialize_identity_coverage_invalidation.sql": "b17ba62531be7be177c2010b5c53d294b3247820",
+        "src/main/resources/db/migration/V32__governed_identity_preactivation_attestation.sql": "35055c3df2749031354a676f16b2ae1cbaa82a37",
+        "src/main/resources/db/migration/V33__human_new_identity_decision.sql": "cd1fff22f0c30463e833aebc805c1dd9e56661eb",
+        "src/main/resources/db/migration/V34__repeat_human_review_after_stale_coverage.sql": "31a01405ee2b423e2d3555a205530ec98d403f22",
+        "src/main/resources/db/migration/V3__relationship_resolution.sql": "fbea83ca659d5ab1d7074d74f8737cbdbf0b0fee",
+        "src/main/resources/db/migration/V4__spatial_resolution.sql": "c247da666f07b9396ae4c1cb9f2b5537c4ab335b",
+        "src/main/resources/db/migration/V5__human_resolution_merge_split.sql": "d2f86c489c4624825eedc8980360753b18766120",
+        "src/main/resources/db/migration/V6__merge_repoint_and_contribution_links.sql": "9f5b138162fe3bf61208d88b287dcff6041ced99",
+        "src/main/resources/db/migration/V7__governed_serving.sql": "b4816889f4dcd7625d4d08724f1b14e7f94d71f4",
+        "src/main/resources/db/migration/V8__query_complexity_budget.sql": "89a743d1227cbcd774f4b86e0f7eac9a9eac011a",
+        "src/main/resources/db/migration/V9__spatial_query_budget.sql": "c3483b09d7d62d29fe318255144db41aac2218bb"
+      },
+      "requiredSourcePaths": [
+        "src/main/java/it/comune/trieste/ouf/udp/GovernedIdentityEngine.java",
+        "src/main/java/it/comune/trieste/ouf/udp/GovernedIdentityResolutionService.java",
+        "src/main/java/it/comune/trieste/ouf/udp/MaterializationRecoveryService.java",
+        "src/main/java/it/comune/trieste/ouf/udp/ResolutionReviewPackageService.java",
+        "src/main/java/it/comune/trieste/ouf/udp/ScopedIdentityCandidateRepository.java",
+        "src/main/java/it/comune/trieste/ouf/udp/UdpIamSecurityConfiguration.java"
+      ]
+    },
+    "ouf-ingestion-runtime": {
+      "sourceCommit": "163c167d09b8371ff7a62ce7068e9d485b6969b7",
+      "gitTreeSha": "163c167d09b8371ff7a62ce7068e9d485b6969b7",
+      "migrationBlobs": {
+        "src/main/resources/db/migration/V10__quarantine_lifecycle.sql": "9e09b51c5341397f8ac7a4bb3856c2c39e73e489",
+        "src/main/resources/db/migration/V11__classified_source_resilience.sql": "5a175d1203fc7877088246a8f3f9c5209a19fda5",
+        "src/main/resources/db/migration/V12__governed_lifecycle_and_historical_replay.sql": "dce9331ca8dc557fb6481b7edd2ee32073b1b471",
+        "src/main/resources/db/migration/V13__pressure_admission_retry_budget.sql": "73558e8b3d6487f9e819cb2ecb9ea6cfde8b233a",
+        "src/main/resources/db/migration/V14__published_activation_schedule.sql": "4934ee2c8a8661a37266731122e99e2a3a2937d6",
+        "src/main/resources/db/migration/V1__ingestion_runtime_core.sql": "abb212187a17f4780bc8efa2480e78beb04a5875",
+        "src/main/resources/db/migration/V2__durable_ack_and_replay.sql": "0364b1c5d359696424cf148e46d96f4ec5580f8e",
+        "src/main/resources/db/migration/V3__trusted_operations.sql": "5702b8c19eb2a0326011a06086ea9f3a30c67e33",
+        "src/main/resources/db/migration/V4__scheduler_and_source_health.sql": "8cee49d901e616ffc885e09dfbace7c82e3a4999",
+        "src/main/resources/db/migration/V5__replay_execution_lifecycle.sql": "4a5047c7ff499d47db73adcbe3b9692a8b50c171",
+        "src/main/resources/db/migration/V6__protected_operational_log.sql": "180e364d475e951a89c734716a04f3ce033d12e4",
+        "src/main/resources/db/migration/V7__execution_worker_and_snapshot.sql": "35fff4384dc503eaeb3bf371b1a710d1fe69219a",
+        "src/main/resources/db/migration/V8__schema_surveillance.sql": "dd1cb219ef4f125a51681176cceb9e2258b7db66",
+        "src/main/resources/db/migration/V9__runtime_issue_governance.sql": "bcd0556915bb1f362da35c5609f4f0904472fc0b"
+      },
+      "requiredSourcePaths": [
+        "src/main/java/it/comune/trieste/ouf/ingestion/FrozenConfigurationProbe.java",
+        "src/main/java/it/comune/trieste/ouf/ingestion/IngestionIamSecurityConfiguration.java"
+      ]
+    }
+  }
+}

@@ -35,8 +35,14 @@ public final class ManagedTabularAdapter implements AdapterSpi {
   }
 
   private List<SourceRecord> csv(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits){
-    try(Reader reader=new InputStreamReader(new ByteArrayInputStream(bytes),StandardCharsets.UTF_8)){
-      CSVFormat format=CSVFormat.RFC4180.builder().setHeader().setSkipHeaderRecord(true).setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).get();
+    Object rawDelimiter=b.configuration().getOrDefault("csvDelimiter",",");
+    if(!(rawDelimiter instanceof String delimiter)||!Set.of(",",";").contains(delimiter))
+      throw error("ING_MANAGED_CSV_DIALECT_INVALID",ErrorClass.CONFIGURATION);
+    int start=bytes.length>=3&&(bytes[0]&0xff)==0xef&&(bytes[1]&0xff)==0xbb
+        &&(bytes[2]&0xff)==0xbf?3:0;
+    try(Reader reader=new InputStreamReader(new ByteArrayInputStream(bytes,start,bytes.length-start),StandardCharsets.UTF_8)){
+      CSVFormat format=CSVFormat.RFC4180.builder().setDelimiter(delimiter.charAt(0))
+          .setHeader().setSkipHeaderRecord(true).setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).get();
       List<SourceRecord> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
       for(CSVRecord record:format.parse(reader)){
         if(record.size()>limits.columns)throw error("ING_MANAGED_TOO_MANY_COLUMNS",ErrorClass.DATA);

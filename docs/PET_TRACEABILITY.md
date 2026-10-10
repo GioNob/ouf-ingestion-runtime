@@ -1,6 +1,4 @@
-# Historical PET v1.2 implementation checklist
-
-The applicable baseline is PET Ingestion v1.3, Matrix v1.7 and Blueprint v0.3. This retained checklist records earlier implementation scope; its checked boxes do not imply full v1.3 or target acceptance. Operational-awareness and cross-module gates remain tracked in the current roadmap. See the [executed checkpoint](https://github.com/GioNob/ouf-semantic-registry/blob/052bab768fffccebeefdf69c32225fbbd8bf7bcc/docs/FILE_TO_SEARCH_STATUS_20261010.md). No previously unchecked gate is waived by this editorial update.
+# PET v1.2 traceability checklist
 
 `IMPLEMENTED` requires executable tests; unchecked items are release blockers unless explicitly delegated.
 
@@ -64,3 +62,10 @@ The applicable baseline is PET Ingestion v1.3, Matrix v1.7 and Blueprint v0.3. T
 - [x] Managed CSV/XLSX adapter slices and REST/WFS end-to-end slices through durable UDP ACK and watermark.
 - [x] OpenAPI 3.1 structural, security, unique-operation and implementation-parity release gate.
 - [x] Non-root immutable-image deployment, CycloneDX SBOM, vulnerability gate and checksummed evidence package.
+
+
+## Consolidated live lineage — 2026-10-10
+
+Main reconciles the advanced governed-record-retry / IAM / frozen-configuration source baseline 163c167d09b8371ff7a62ce7068e9d485b6969b7 with supported-runtime corrections. All fourteen retained SQL migrations are unchanged. Candidate 8b908554314617298242eb2ae8312f734f55e817 passes all eight workflows, 118 tests (zero failures/errors/skips), full HIGH/CRITICAL image scan including unfixed entries (zero findings), PostgreSQL restore, R2 serving/GeoPackage and frozen consumer probes. SQLite native plus XLSX round-trip also pass inside the actual non-root runtime image with network disabled, root filesystem read-only and isolated executable /tmp for native-library loading. [Qualification](docs/LIVE_BASELINE_QUALIFICATION_20261010.md), [current evidence](evidence/live-baseline-qualified-20261010.json).
+
+The original distroless scan failed on nine OS HIGH; its evidence is retained. No exceptions were added. Older file-loop-ci-qualified evidence remains historical and does not describe this candidate. Source reconciliation does not import an image, mutate the VPS, replay Cinema or grant release acceptance. Current PET v1.3 / Matrix v1.7 / Blueprint v0.3 and terminology notice v1.1 remain applicable; file consolidation and authorized search precede native vertical API PULL v2.3. Pin actual Docker base digests during release preparation.

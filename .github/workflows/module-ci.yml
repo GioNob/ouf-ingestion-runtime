@@ -36,6 +36,18 @@ jobs:
           mvn -B -ntp -Dtest=OpenApiReleaseGateTest test
       - name: Build non-root container
         run: docker build -t ouf-ingestion:${{ github.sha }} . && test "$(docker image inspect ouf-ingestion:${{ github.sha }} --format '{{.Config.User}}')" = "10002:10002"
+      - name: Verify SQLite and XLSX inside the non-root runtime image
+        run: |
+          mkdir -p target/runtime-image-libs
+          unzip -j target/ingestion-runtime-*.jar 'BOOT-INF/lib/*' -d target/runtime-image-libs >/dev/null
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m \
+            -v "$PWD/target/test-classes:/probe:ro" \
+            -v "$PWD/target/runtime-image-libs:/dependencies:ro" \
+            --entrypoint java ouf-ingestion:${{ github.sha }} \
+            -Djava.awt.headless=true -cp '/probe:/dependencies/*' \
+            it.comune.trieste.ouf.ingestion.RuntimeImageFormatProbe
       - name: Verify runtime SDK packaging
         run: |
           jar tf target/ingestion-runtime-*.jar > target/sdk-packaging.txt
@@ -86,7 +98,7 @@ jobs:
         run: docker build -t ouf-ingestion:${{ github.sha }} .
       - name: Scan image and enforce vulnerability policy
         uses: aquasecurity/trivy-action@v0.36.0
-        with: {image-ref: 'ouf-ingestion:${{ github.sha }}', format: json, output: target/trivy-image.json, severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1'}
+        with: {image-ref: 'ouf-ingestion:${{ github.sha }}', format: json, output: target/trivy-image.json, severity: 'HIGH,CRITICAL', ignore-unfixed: false, exit-code: '1'}
       - name: Validate deployment chart
         run: |
           docker run --rm -v "$PWD:/work" -w /work alpine/helm:3.19.0 lint deploy/helm/ouf-ingestion

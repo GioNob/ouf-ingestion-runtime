@@ -27,7 +27,7 @@ paths:
       x-ouf-authorization-capability: ingestion.run.resume
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunControlRequest'}}}}
-      responses: {'200': {description: Original pinned baseline revalidated and run resumed}, '409': {description: Run is not paused or optimistic conflict}}
+      responses: {'200': {description: Original pinned baseline revalidated and run resumed after blocking quarantines are authorized RETRY_READY}, '409': {description: Run is not paused, optimistic conflict, or blocking quarantine requires governed retry}}
   /runs/{id}/abort:
     post:
       operationId: abortIngestionRun
@@ -244,3 +244,4 @@ components:
         limit: {type: integer, minimum: 1, maximum: 200}
         purpose: {type: string, minLength: 1, maxLength: 500}
       additionalProperties: false
+
