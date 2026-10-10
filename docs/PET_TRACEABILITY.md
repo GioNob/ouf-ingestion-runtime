@@ -1,4 +1,6 @@
-# PET v1.2 traceability checklist
+# Historical PET v1.2 implementation checklist
+
+The applicable baseline is PET Ingestion v1.3, Matrix v1.7 and Blueprint v0.3. This retained checklist records earlier implementation scope; its checked boxes do not imply full v1.3 or target acceptance. Operational-awareness and cross-module gates remain tracked in the current roadmap. See the [executed checkpoint](https://github.com/GioNob/ouf-semantic-registry/blob/052bab768fffccebeefdf69c32225fbbd8bf7bcc/docs/FILE_TO_SEARCH_STATUS_20261010.md). No previously unchecked gate is waived by this editorial update.
 
 `IMPLEMENTED` requires executable tests; unchecked items are release blockers unless explicitly delegated.
 

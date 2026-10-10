@@ -1,0 +1,43 @@
+{
+  "schema": "ouf.component.file-loop-ci-qualification.v1",
+  "date": "2026-10-10",
+  "repository": "ouf-ingestion-runtime",
+  "sourceCommit": "3a33c6c248ec3a1151f5a4cb888a2b9598b16418",
+  "workflowRuns": [
+    {
+      "id": 38064673608,
+      "name": "Shared Authorization SDK pairwise",
+      "conclusion": "success"
+    },
+    {
+      "id": 38064673544,
+      "name": "R2a Onboarding automatic activation",
+      "conclusion": "success"
+    },
+    {
+      "id": 38064673622,
+      "name": "Ingestion Runtime module CI",
+      "conclusion": "success"
+    },
+    {
+      "id": 38064673559,
+      "name": "R2b source to authorized serving",
+      "conclusion": "success"
+    },
+    {
+      "id": 38064673585,
+      "name": "R2e GeoPackage features and governed camera-cabinet relations",
+      "conclusion": "success"
+    },
+    {
+      "id": 38064673509,
+      "name": "R2c governed publication to historical serving",
+      "conclusion": "success"
+    }
+  ],
+  "mainIntegrated": true,
+  "fixtureRepairCommit": "ff342057e6646a9013dc369e12d900579d8205b4",
+  "applicationHealthProven": false,
+  "releaseAcceptance": false,
+  "verificationScope": "Pinned source revision; not a new VPS read or deployment"
+}
