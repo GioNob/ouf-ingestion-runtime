@@ -37,8 +37,8 @@ class IngestionIamHttpBoundaryTest {
   @MockitoBean(name="ingestionJwtDecoder") JwtDecoder decoder;
 
   @Configuration(proxyBeanMethods=false)
-  @EnableAutoConfiguration(exclude={org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration.class,
-      org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration.class,AuthorizationAutoConfiguration.class})
+  @EnableAutoConfiguration(exclude={org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration.class,
+      org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration.class,AuthorizationAutoConfiguration.class})
   @Import({IngestionIamSecurityConfiguration.class, Probe.class})
   static class App {
     @Bean org.springframework.boot.health.contributor.HealthIndicator ingestionReadiness(){
