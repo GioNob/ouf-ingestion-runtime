@@ -1,0 +1,40 @@
+name: Retained live source continuity
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  continuity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check retained schema bytes and governed feature presence
+        run: |
+          python3 -m unittest discover -s tests -p 'test_source_continuity.py' -v
+          mkdir -p target
+          python3 - <<'PY'
+          import json, subprocess
+          entries = []
+          raw = subprocess.run(['git','ls-tree','-rz','HEAD'],check=True,capture_output=True).stdout
+          for record in raw.split(b'\0'):
+              if not record:
+                  continue
+              metadata, path = record.split(b'\t',1)
+              mode, kind, digest = metadata.decode('ascii').split()
+              entries.append({'path':path.decode('utf-8'),'mode':mode,'type':kind,'sha':digest})
+          with open('target/source-continuity-tree.json','w',encoding='utf-8') as output:
+              json.dump({'truncated':False,'tree':entries},output)
+          PY
+          python3 scripts/check-source-continuity.py \
+            --baseline releases/file-loop-retained-source-baseline-20261010.json \
+            --repository "${GITHUB_REPOSITORY#*/}" \
+            --candidate-tree target/source-continuity-tree.json \
+            > target/source-continuity-result.json
+      - name: Retain bounded source continuity result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-continuity-${{ github.run_id }}
+          path: target/source-continuity-result.json
+          retention-days: 30
