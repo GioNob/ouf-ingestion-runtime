@@ -36,3 +36,8 @@ Candidate `248b06256c2ea28236ae1bc7bdd55e3f8233d231` passed all 18 push/PR GitHu
 Each page includes `itemsDigest` over the visible item projection. A cross-owner consumer must refetch and reauthorize a saved owner page before using its offset, and reject continuation if the digest changes. A cached offset is not authorization to disclose saved incident payloads.
 
 This is owner snapshot paging, not a persistent operator consultation receipt, a production deployment, or proof of complete timestamp catch-up. Late commits are captured by pending publication, but a future persistent resume bookmark must use owner publication coverage rather than a caller timestamp.
+
+
+## Persistent publication coverage
+
+The [publication bookmark contract](INCIDENT_PUBLICATION_BOOKMARKS.md) adds private, long-lived coverage metadata independent of thirty-minute page sessions. It resumes from the committed tenant publication ledger and never uses a timestamp/private sequence as complete progress. It remains separate from client delivery and operator consultation; native qualification/public transport/target gates are tracked in the central adoption ledger.
