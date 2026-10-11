@@ -2,6 +2,8 @@ package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.*;
 import java.time.*;
+import java.nio.charset.StandardCharsets;
+import javax.sql.DataSource;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +21,7 @@ class OperationalPriorityRuntimeTest {
     r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));
   }
   @Autowired JdbcClient sql;
+  @Autowired DataSource dataSource;
   @Autowired OperationalAwarenessService service;
   @Autowired PlatformTransactionManager transactions;
 
@@ -117,6 +120,32 @@ class OperationalPriorityRuntimeTest {
     var rows=service.incidents("OPEN",source,OffsetDateTime.now().minusHours(1),100,actor(tenant));
     assertThat(rows).hasSize(1);
     assertThat(rows.getFirst()).containsEntry("incident_id",id).containsEntry("lifecycle_state","OPEN");
+  }
+
+  @Test void additiveMigrationBackfillsOnlyProvableTimesOnPopulatedLegacyTable() throws Exception {
+    String tenant="upgrade-"+UUID.randomUUID(),source="source-"+UUID.randomUUID();
+    UUID run=run(tenant,source),open=issue(run,source,"WARNING",OffsetDateTime.now().minusDays(3));
+    UUID resolved=issue(run,source,"ERROR",OffsetDateTime.now().minusDays(3));
+    resolve(resolved,OffsetDateTime.now().minusDays(1));
+    String schema="observation_upgrade_"+UUID.randomUUID().toString().replace("-","");
+    sql.sql("create schema "+schema).update();
+    try {
+      sql.sql("create table "+schema+".runtime_issue (like ouf_ingestion.runtime_issue including all)").update();
+      sql.sql("alter table "+schema+".runtime_issue drop column last_updated_at").update();
+      sql.sql("insert into "+schema+".runtime_issue select (jsonb_populate_record(null::"+schema+".runtime_issue,to_jsonb(i)-'last_updated_at')).* from ouf_ingestion.runtime_issue i where i.issue_id in (:open,:resolved)")
+        .param("open",open).param("resolved",resolved).update();
+      try(var resource=getClass().getResourceAsStream("/db/migration/V16__incident_observation_time.sql")){
+        assertThat(resource).isNotNull();
+        String migration=new String(resource.readAllBytes(),StandardCharsets.UTF_8).replace("ouf_ingestion",schema);
+        try(var connection=dataSource.getConnection();var statement=connection.createStatement()){statement.execute(migration);}
+      }
+      assertThat(sql.sql("select count(*) from "+schema+".runtime_issue where last_updated_at=greatest(created_at,resolved_at)").query(Long.class).single()).isEqualTo(2L);
+      assertThat(sql.sql("select last_updated_at from "+schema+".runtime_issue where issue_id=:id").param("id",open).query(OffsetDateTime.class).single()).isBefore(OffsetDateTime.now().minusDays(2));
+      sql.sql("update "+schema+".runtime_issue set severity='ERROR' where issue_id=:id").param("id",open).update();
+      assertThat(sql.sql("select last_updated_at from "+schema+".runtime_issue where issue_id=:id").param("id",open).query(OffsetDateTime.class).single()).isAfter(OffsetDateTime.now().minusHours(1));
+    } finally {
+      sql.sql("drop schema "+schema+" cascade").update();
+    }
   }
 
   private OffsetDateTime observation(UUID id) {
