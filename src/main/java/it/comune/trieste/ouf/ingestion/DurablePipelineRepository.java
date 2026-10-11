@@ -21,7 +21,7 @@ public class DurablePipelineRepository {
 
   @Transactional
   public UUID stage(StageCommand c,UUID attempt,UUID lineage,UUID handoff){
-    if(c.claim()!=null) requireLease(c);
+    requireRecoveryBudget(c.runId(),c.claim());if(c.claim()!=null) requireLease(c);
     String encodedPayload=encode(c.payload);sql.sql("select pg_advisory_xact_lock(hashtextextended(:i,0))").param("i",c.idempotencyKey).query().singleRow();
     if(c.claim()!=null) requireLease(c); // Recheck after any idempotency-lock wait.
     List<Map<String,Object>> existing=sql.sql("select handoff_id,payload_json=cast(:p as jsonb) payload_matches from ouf_ingestion.handoff_outbox where idempotency_key=:i").param("p",encodedPayload).param("i",c.idempotencyKey).query().listOfRows();
@@ -91,6 +91,10 @@ public class DurablePipelineRepository {
   }
 
   public void requireRecoveryBudget(RunExecutionRepository.Claim claim){RunRecoveryBudget.requireCurrent(sql,claim);}
+  public void requireRecoveryBudget(UUID run,RunExecutionRepository.Claim claim){
+    if(claim==null){boolean recovering=sql.sql("select exists(select 1 from ouf_ingestion.run_recovery_session where run_id=:r)").param("r",run).query(Boolean.class).single();if(recovering)throw new IllegalStateException("ING_RECOVERY_CLAIM_REQUIRED");}
+    else{if(!run.equals(claim.runId()))throw new IllegalStateException("ING_PARTITION_LEASE_LOST");RunRecoveryBudget.requireCurrent(sql,claim);}
+  }
 
   private void requireLease(StageCommand c){
     var claim=c.claim();

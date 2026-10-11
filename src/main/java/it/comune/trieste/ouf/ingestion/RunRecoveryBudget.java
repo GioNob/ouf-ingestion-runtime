@@ -34,7 +34,7 @@ final class RunRecoveryBudget {
     if(!paused)throw new IllegalStateException("ING_RUN_STATE_CONFLICT");
     if(correlation==null||correlation.isBlank()||correlation.length()>500)
       throw new IllegalArgumentException("ING_RECOVERY_CORRELATION_INVALID");
-    sql.sql("update ouf_ingestion.run_recovery_session set state='SUPERSEDED' where run_id=:r and state='ACTIVE'").param("r",run).update();
+    sql.sql("update ouf_ingestion.run_recovery_session set state=case when attempts>=max_attempts or deadline_at<=clock_timestamp() then 'EXHAUSTED' else 'SUPERSEDED' end where run_id=:r and state='ACTIVE'").param("r",run).update();
     UUID id=UUID.randomUUID();
     sql.sql("with epoch as (select coalesce(max(epoch),0)+1 value from ouf_ingestion.run_recovery_session where run_id=:r), now as (select clock_timestamp() value) insert into ouf_ingestion.run_recovery_session(session_id,run_id,epoch,expected_control_version,profile_ref,max_attempts,max_elapsed_seconds,actor_subject,authorization_decision_ref,reason_code,correlation_id,granted_at,deadline_at) select :i,:r,epoch.value,:v,:p,:a,:e,:actor,:decision,:reason,:c,now.value,now.value+(:e*interval '1 second') from epoch,now")
       .param("i",id).param("r",run).param("v",version).param("p",PROFILE).param("a",budget.maxAttempts()).param("e",budget.maxElapsedSeconds())

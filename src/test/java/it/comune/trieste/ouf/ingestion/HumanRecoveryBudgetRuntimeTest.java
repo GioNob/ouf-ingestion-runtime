@@ -30,7 +30,7 @@ import org.springframework.test.context.*;
     assertThat(execution.claim("exhaust",Duration.ofMinutes(2))).isEmpty();assertThat(state.run(run)).containsEntry("state","PAUSED").containsEntry("failure_code","ING_RECOVERY_BUDGET_EXHAUSTED");
     resume(run,1,2,3600);var rows=sessions(run);assertThat(rows).hasSize(2);assertThat(rows.getFirst()).containsEntry("state","EXHAUSTED").containsEntry("attempts",1);assertThat(rows.getLast()).containsEntry("state","ACTIVE").containsEntry("attempts",0).containsEntry("max_attempts",2);
     assertThat(rows.getFirst().get("session_id")).isNotEqualTo(rows.getLast().get("session_id"));assertThat(sql.sql("select checkpoint_json::text||committed_watermark_json::text from ouf_ingestion.ing_partition where run_id=:r").param("r",run).query(String.class).single()).contains("7","5");
-    assertThat(sql.sql("select count(*) from ouf_ingestion.audit_event where resource_id=:r and event_type='RUN_RESUMED' and detail_json ? 'recoverySessionId'").param("r",run.toString()).query(Long.class).single()).isEqualTo(2);
+    assertThat(sql.sql("select count(*) from ouf_ingestion.audit_event where resource_id=:r and event_type='RUN_RESUMED' and jsonb_exists(detail_json,'recoverySessionId')").param("r",run.toString()).query(Long.class).single()).isEqualTo(2);
   }
   @Test void concurrentHumanCommandsCreateExactlyOneSession() throws Exception {
     UUID run=paused();CountDownLatch preflights=new CountDownLatch(2);
@@ -88,6 +88,22 @@ import org.springframework.test.context.*;
     assertThatThrownBy(()->new RunRecoveryBudget.Request(0,86400,"RETRY")).hasMessage("ING_RECOVERY_BUDGET_INVALID");assertThatThrownBy(()->new RunRecoveryBudget.Request(1,0,"RETRY")).hasMessage("ING_RECOVERY_BUDGET_INVALID");
     UUID run=paused();state.recordFailure(String.valueOf(state.run(run).get("source_id")),"ING_GATEWAY_503",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);assertThat(sessions(run)).isEmpty();
     assertThatThrownBy(()->RunRecoveryBudget.grant(sql,run,0,human,"corr",RunRecoveryBudget.Request.defaults())).hasMessage("ING_RECOVERY_TRANSACTION_REQUIRED");
+  }
+  @Test void schedulerCannotCreateANewRunAroundAnExhaustedIncident(){
+    sql.sql("truncate table ouf_ingestion.ing_schedule cascade").update();UUID run=paused();resume(run,0,1,3600);
+    var claim=execution.claim("first",Duration.ofMinutes(2)).orElseThrow();execution.release(claim);assertThat(execution.claim("exhaust",Duration.ofMinutes(2))).isEmpty();
+    String source=String.valueOf(state.run(run).get("source_id"));
+    sql.sql("insert into ouf_ingestion.ing_schedule(schedule_id,tenant_id,source_id,interval_seconds,next_run_at) values(:i,:t,:s,60,clock_timestamp()-interval '1 minute')").param("i",UUID.randomUUID()).param("t",human.tenantId()).param("s",source).update();
+    assertThat(state.claimDue("scheduler",Duration.ofMinutes(2))).isEmpty();assertThat(sessions(run)).hasSize(1);assertThat(sessions(run).getFirst()).containsEntry("attempts",1);
+  }
+  @Test void parallelPartitionsDoNotSpendOrInvalidateTheLastInflightBatch(){
+    UUID run=paused();sql.sql("insert into ouf_ingestion.ing_partition(run_id,partition_key,state) values(:r,'other','PAUSED')").param("r",run).update();resume(run,0,1,3600);
+    var first=execution.claim("first",Duration.ofMinutes(2)).orElseThrow();assertThat(execution.claim("second",Duration.ofMinutes(2))).isEmpty();durable.requireRecoveryBudget(first);assertThat(sessions(run).getFirst()).containsEntry("attempts",1).containsEntry("state","ACTIVE");
+  }
+  @Test void unclaimedLegacyPublicationCannotBypassARecoverySession(){
+    UUID run=paused();resume(run,0,2,3600);
+    var command=new DurablePipelineRepository.StageCommand(run,"default",8,"object",1,"test-adapter","1","bundle:1","same-operation",Map.of(),Map.of(),Map.of("ordinal",8),Map.of("ordinal",8));
+    assertThatThrownBy(()->durable.stage(command)).hasMessage("ING_RECOVERY_CLAIM_REQUIRED");assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(Long.class).single()).isZero();
   }
   private static ExecutionBundle bundle(String source){return new ExecutionBundle("bundle","1","sha256:pinned",source,"INTERNAL_MANAGED_CSV","managed:object",Map.ofEntries(Map.entry("pinnedReferences",List.of("schema:1","semantic:1")),Map.entry("sourceSchemaRef","schema:1"),Map.entry("sourceSchemaId","places"),Map.entry("sourceSchemaVersion","1"),Map.entry("expectedFieldNames",List.of("name")),Map.entry("typeCode","place"),Map.entry("semanticPublicationSetRef","semantic:1"),Map.entry("adapterProfileRef","adapter:test:1"),Map.entry("adapterId","test-adapter"),Map.entry("adapterRuntimeVersion","1.0.0"),Map.entry("observationPolicy","ACQUISITION_TIME"),Map.entry("propertyMappings",List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name","transform","IDENTITY"))),Map.entry("mappingRefs",List.of("mapping:1"))));}
   private static String required(String name){String value=System.getenv(name);if(value==null)throw new IllegalStateException(name+" required");return value;}
