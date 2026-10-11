@@ -1,8 +1,12 @@
+# Current resilience checkpoint — HUMAN recovery budget qualified and merged
+
+[Platform policy v2](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md) applies by default. [PR34](https://github.com/GioNob/ouf-ingestion-runtime/pull/34) adds new finite HUMAN budgets after exhaustion, immutable history, atomic grants, worker/deadline fencing, scheduler isolation and ACK-gated issue resolution. [Implementation/profile/remaining scope](docs/HUMAN_RECOVERY_BUDGET_V1.md).35 focused tests and134 full-module tests PASS; integration/supply-chain/DR checks green on the named candidate. [Evidence](evidence/human-recovery-budget-qualified-20261011.json). No target migration/VPS apply; full automatic retry and all-module policy adoption remain open.
+
 # OUF Ingestion Runtime
 
-Implementation baseline for PET `OUF_PET_EF_Ingestion_Runtime_v1_2`.
+Applicable normative PET: `OUF_PET_EF_Ingestion_Runtime_v1_3_Operational_Awareness`; the original v1.2 implementation baseline remains historical evidence.
 
-Normative priority: L0 invariants > PET v1.2 > frozen rc3 contracts > implementation/tests.
+Normative priority: L0 invariants > applicable PET v1.3 > frozen rc3 contracts > implementation/tests.
 
 The deployable owns adapter execution, PULL scheduling, managed-file ingestion, transformation, checkpointing, durable handoff, lineage, quarantine and operational state. It does not own onboarding, semantic authoring, authoritative Urban Object resolution, final UDP persistence, IAM policy or Gateway routing.
 

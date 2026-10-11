@@ -12,7 +12,9 @@ Admission counts batches atomically. Exhaustion pauses the affected run/partitio
 
 ## Qualification
 
-Candidate branch: resilience/human-recovery-budget-v1; [PR34](https://github.com/GioNob/ouf-ingestion-runtime/pull/34). CI results are recorded after completion. Added16 native PostgreSQL tests cover human renewal after exhaustion, concurrent grants, stale-worker fencing, cumulative budgets/one issue, restart/elapsed exhaustion, late remote response without checkpoint/ACK, AI/tenant/capability denial, revoked preflight, immutable history, pressure admission and invalid policy.
+[PR34](https://github.com/GioNob/ouf-ingestion-runtime/pull/34) merged as6f583ca6b226a63c4a9b55df19f28728c4fd9348. Exact qualified candidate80bcb2f8c1f478c0b6d18c46b9eeff5cede5f68f: [native PostgreSQL38104209271](https://github.com/GioNob/ouf-ingestion-runtime/actions/runs/38104209271), job114366142916,35 tests PASS including16 new policy tests. [Whole module38104209251](https://github.com/GioNob/ouf-ingestion-runtime/actions/runs/38104209251):134 tests PASS, supply-chain/nonroot runtime/DR jobs SUCCESS. Authorization, Onboarding, serving, historical publication, GeoPackage and retained continuity checks on the same candidate are also SUCCESS. [Structured evidence](../evidence/human-recovery-budget-qualified-20261011.json).
+
+The first run38104025072 failed on the new test's use of the JSON ? operator within JdbcClient named parameters. Replaced with jsonb_exists, without changing production behavior; corrected38104163969 and the final candidate pass. The legacy control test fixture now uses SDK actor type HUMAN and ingestion.run.resume capability, matching actual service enforcement. Added16 native PostgreSQL tests cover human renewal after exhaustion, concurrent grants, stale-worker fencing, cumulative budgets/one issue, restart/elapsed exhaustion, late remote response without checkpoint/ACK, AI/tenant/capability denial, revoked preflight, immutable history, pressure admission and invalid policy.
 
 ## Explicit remaining scope
 
