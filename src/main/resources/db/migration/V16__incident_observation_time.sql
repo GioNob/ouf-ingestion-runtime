@@ -9,7 +9,7 @@ ALTER TABLE ouf_ingestion.runtime_issue ALTER COLUMN last_updated_at SET NOT NUL
 CREATE FUNCTION ouf_ingestion.maintain_runtime_issue_observation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    NEW.last_updated_at := GREATEST(NEW.created_at, NEW.resolved_at);
+    NEW.last_updated_at := GREATEST(NEW.created_at, clock_timestamp(), NEW.resolved_at);
   ELSE
     IF NEW.last_updated_at IS DISTINCT FROM OLD.last_updated_at THEN
       RAISE EXCEPTION 'ING_INCIDENT_OBSERVATION_OWNER_MAINTAINED';

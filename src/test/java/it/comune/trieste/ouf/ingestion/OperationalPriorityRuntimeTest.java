@@ -45,8 +45,9 @@ class OperationalPriorityRuntimeTest {
     UUID changed=issue(run,source,"ERROR",OffsetDateTime.now().minusDays(3));
     UUID unchanged=issue(run,source,"ERROR",OffsetDateTime.now().minusDays(3));
     UUID hidden=issue(run("other-"+tenant,source),source,"ERROR",OffsetDateTime.now());
+    var since=OffsetDateTime.now();
     resolve(changed,OffsetDateTime.now());
-    var rows=service.incidents(null,source,OffsetDateTime.now().minusHours(1),100,actor(tenant));
+    var rows=service.incidents(null,source,since,100,actor(tenant));
     assertThat(rows).hasSize(1);
     assertThat(rows.getFirst()).containsEntry("incident_id",changed).containsEntry("lifecycle_state","RESOLVED");
     assertThat(rows).noneMatch(x->unchanged.equals(x.get("incident_id"))||hidden.equals(x.get("incident_id")));
@@ -67,10 +68,11 @@ class OperationalPriorityRuntimeTest {
     UUID changed=issue(run,source,"WARNING",OffsetDateTime.now().minusDays(3));
     UUID unchanged=issue(run,source,"ERROR",OffsetDateTime.now().minusDays(3));
     UUID hidden=issue(run("other-"+tenant,source),source,"WARNING",OffsetDateTime.now().minusDays(3));
+    var since=OffsetDateTime.now();
     for(UUID id:List.of(changed,hidden)){
       sql.sql("update ouf_ingestion.runtime_issue set severity='ERROR',resolution_reason='owner investigation' where issue_id=:id").param("id",id).update();
     }
-    var rows=service.incidents(null,source,OffsetDateTime.now().minusHours(1),100,actor(tenant));
+    var rows=service.incidents(null,source,since,100,actor(tenant));
     assertThat(rows).hasSize(1);
     assertThat(rows.getFirst()).containsEntry("incident_id",changed).containsEntry("lifecycle_state","OPEN").containsEntry("severity","ERROR");
     assertThat(rows).noneMatch(x->unchanged.equals(x.get("incident_id"))||hidden.equals(x.get("incident_id")));
@@ -80,9 +82,10 @@ class OperationalPriorityRuntimeTest {
     String tenant="no-op-"+UUID.randomUUID(),source="source-"+UUID.randomUUID();
     UUID id=issue(run(tenant,source),source,"ERROR",OffsetDateTime.now().minusDays(2));
     var before=observation(id);
+    var since=OffsetDateTime.now();
     sql.sql("update ouf_ingestion.runtime_issue set severity=severity where issue_id=:id").param("id",id).update();
     assertThat(observation(id)).isEqualTo(before);
-    assertThat(service.incidents(null,source,OffsetDateTime.now().minusHours(1),100,actor(tenant))).isEmpty();
+    assertThat(service.incidents(null,source,since,100,actor(tenant))).isEmpty();
   }
 
   @Test void observationCannotBeBackdatedOrRaisedByDirectCaller() {
@@ -100,13 +103,14 @@ class OperationalPriorityRuntimeTest {
     String tenant="rollback-"+UUID.randomUUID(),source="source-"+UUID.randomUUID();
     UUID id=issue(run(tenant,source),source,"WARNING",OffsetDateTime.now().minusDays(2));
     var before=observation(id);
+    var since=OffsetDateTime.now();
     new TransactionTemplate(transactions).executeWithoutResult(tx->{
       sql.sql("update ouf_ingestion.runtime_issue set severity='ERROR' where issue_id=:id").param("id",id).update();
       assertThat(observation(id)).isAfter(before);
       tx.setRollbackOnly();
     });
     assertThat(observation(id)).isEqualTo(before);
-    assertThat(service.incidents(null,source,OffsetDateTime.now().minusHours(1),100,actor(tenant))).isEmpty();
+    assertThat(service.incidents(null,source,since,100,actor(tenant))).isEmpty();
   }
 
   @Test void resolutionMetadataUpdateAndReopeningKeepMonotoneObservation() {
@@ -146,6 +150,15 @@ class OperationalPriorityRuntimeTest {
     } finally {
       sql.sql("drop schema "+schema+" cascade").update();
     }
+  }
+
+  @Test void newlyPersistedIncidentWithOldFirstSeenStillAppearsInCurrentCatchup() {
+    String tenant="late-observation-"+UUID.randomUUID(),source="source-"+UUID.randomUUID();
+    UUID run=run(tenant,source);
+    var since=OffsetDateTime.now().minusMinutes(1);
+    UUID id=issue(run,source,"ERROR",OffsetDateTime.now().minusDays(3));
+    assertThat(observation(id)).isAfter(since);
+    assertThat(service.incidents(null,source,since,100,actor(tenant))).hasSize(1).allMatch(x->id.equals(x.get("incident_id")));
   }
 
   private OffsetDateTime observation(UUID id) {
