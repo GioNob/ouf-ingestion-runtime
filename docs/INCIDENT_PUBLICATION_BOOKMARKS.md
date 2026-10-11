@@ -1,6 +1,6 @@
 # Owner publication bookmarks — PostgreSQL implementation
 
-Follow [mandatory platform resilience policy](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md), [cursor/bookmark/consultation design](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_CURSOR_DESIGN.md), Ingestion PET1.3 operational awareness and MCP PET1.4. This is an owner-local Java primitive; no public input schema/route is widened and runtime migration remains explicit.
+Follow [mandatory platform resilience policy](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md), [cursor/bookmark/consultation design](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_CURSOR_DESIGN.md), Ingestion PET1.3 operational awareness and MCP PET1.4. The owner-local Java core and opt-in hidden HTTP transport are qualified in PR38–39; runtime migration remains explicit.
 
 Profile `ouf.owner-publication-bookmark.v1` stores opaque principal/tenant/actor/workload/issuer/audience-bound metadata, policy reference, source/state scope, committed publication boundary and parent bookmark. New login/authentication context does not erase coverage; all calls use current owner-local SDK collection/row decisions. Bookmarks are neither grants nor cached incident payloads.
 
@@ -14,7 +14,7 @@ All results retain consultationRecorded=false. A publicationBookmark is only a r
 
 Native PostgreSQL qualification covers late lower sequence publication resume, page expiry/service recreation/new login, complete versus redacted chains, replay, actor/tenant/policy fencing/missing SDK, retention floor/expired token, immutable metadata/no payload, finite persistent capacity with independent writes and concurrent issuance. Full module/source/serving/authorization/HUMAN regressions remain required.
 
-OPEN: public producer/global schema/transport, actual host/SDK/grants/HA and populated target migration, owner history compactor, MCP client delivery/checkpoint and actual alerts. No VPS operation, provider call, email or consumed R9/R10 replay is performed.
+OPEN: global MCP client integration status follows the central adoption ledger; actual host/SDK/grants/HA and populated target migration, owner history compactor, MCP client delivery/checkpoint and actual alerts. No VPS operation, provider call, email or consumed R9/R10 replay is performed.
 
 Captured frame metadata has an immutable digest binding, so source/state/watermark/expiry/configuration drift invalidates progress even if row permissions still allow a projection. Repeated initial reads at the same logical scope/boundary reuse an anchor; unchanged resume returns its parent token with noPublicationProgress=true. These fresh authorized reads do not create duplicate bookmark records or infer consultation. Page/session and control budgets remain finite.
 
@@ -25,4 +25,4 @@ The existing hidden incidents READ endpoint adds three disjoint modes: `{"snapsh
 
 Current owner SDK collection/source and row authorization remain mandatory, including new login, revocation and policy drift. Spring wires the qualified bookmark core; the production adapter does not synthesize authorization. Legacy snapshots stay separate, without bookmark issuance or operator receipt. Global MCP bookmark vector and concrete client confirmation/CAS are still OPEN; consultationRecorded=false.
 
-Core PR38 qualified47 focused PostgreSQL tests and163 complete-module tests. Additional HTTP tests qualify fresh login/resume, saved source inheritance, redacted/current policy page chain and malformed requests before writes. No target migration/deployment or R9/R10 operation is implied.
+Core PR38 qualified47 focused PostgreSQL tests and163 complete-module tests. Transport PR39 is merged after18 gates,50 focused PostgreSQL tests and166 complete-module tests. Additional HTTP tests qualify fresh login/resume, saved source inheritance, redacted/current policy page chain and malformed requests before writes. No target migration/deployment or R9/R10 operation is implied.

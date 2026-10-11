@@ -1,9 +1,9 @@
-**Bookmark di pubblicazione:** [contratto PostgreSQL](docs/INCIDENT_PUBLICATION_BOOKMARKS.md), distinto da pagine temporanee e conferma operatore; core qualificato e integrato (47 prove PostgreSQL mirate, 163 test completi); HTTP opt-in in qualifica, nessun rollout target.
+**Bookmark di pubblicazione:** [contratto PostgreSQL](docs/INCIDENT_PUBLICATION_BOOKMARKS.md), distinto da pagine temporanee e conferma operatore; core e HTTP opt-in qualificati e integrati (PR38–39: 50 prove PostgreSQL mirate, 166 test completi), nessun rollout target.
 
 > **Policy di piattaforma vigente:** [Resilienza, quarantena, incidenti e alert — v3](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md). Obbligatoria per sviluppo e revisione; [adozione e prove](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_ADOPTION.md).
 
 
-**Resilience v3 — prima tranche integrata:** priorità incidenti e catch-up qualificati per i perimetri MCP/Ingestion/Gateway; [prove e limiti](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_ADOPTION.md), [piano operativo](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_RESILIENCE_PLAN.md). Cursor/memoria operatore, correlazione dipendenze e alert restano aperti.
+**Resilience v3 — prima tranche integrata:** priorità incidenti e catch-up qualificati per i perimetri MCP/Ingestion/Gateway; [prove e limiti](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_ADOPTION.md), [piano operativo](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_RESILIENCE_PLAN.md). Checkpoint di consultazione, correlazione dipendenze e alert reali restano aperti.
 
 **Seconda tranche integrata e qualificata:** autorizzazione owner e proiezioni incomplete MCP; osservazione persistente delle modifiche Ingestion. [Prove e limiti](evidence/operational-read-catchup-qualified-20261011.json), [design cursor/consultazione — OPEN](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_CURSOR_DESIGN.md).
 
