@@ -266,8 +266,8 @@ class IncidentSnapshotRuntimeTest {
    select gen_random_uuid(),gen_random_uuid(),b.principal_id,b.tenant_id,b.identity_digest,b.policy_ref,b.source_id,b.state,b.high_watermark,b.parent_token
    from ouf_ingestion.incident_publication_bookmark b cross join generate_series(1,511) g where b.token=:old
    """).param("old",bookmark).update();
-  assertStatus(503,()->bookmarks.start(scope.source(),null,10,actor(scope,1,null)));
   UUID independent=issue(scope,"ERROR");assertThat(transitionCount(independent)).isEqualTo(1);
+  assertStatus(503,()->bookmarks.start(scope.source(),null,10,actor(scope,1,null)));
   var recreated=new IncidentPublicationBookmarkService(sql,json,snapshots,transactions);
   assertStatus(503,()->recreated.start(scope.source(),null,10,actor(scope,1,null)));
   assertThat(recreated.page(UUID.fromString((String)first.get("cursor")),actor(scope,1,null)).get("publicationBookmark")).isEqualTo(bookmark.toString());
@@ -283,6 +283,28 @@ class IncidentSnapshotRuntimeTest {
    var b=pool.submit(()->{barrier.await();return bookmarks.page(cursor,actor(scope,1,null));});
    assertThat(a.get(10,TimeUnit.SECONDS).get("publicationBookmark")).isEqualTo(b.get(10,TimeUnit.SECONDS).get("publicationBookmark"));
   }
+ }
+
+
+ @Test void unchangedPublicationBoundaryReusesBookmarkWithoutMetadataGrowth(){
+  var scope=scope();issue(scope,"WARNING");
+  var first=bookmarks.start(scope.source(),null,10,actor(scope,1,null));UUID bookmark=UUID.fromString((String)first.get("publicationBookmark"));
+  assertThat(bookmarks.start(scope.source(),null,10,actor(scope,1,null)).get("publicationBookmark")).isEqualTo(bookmark.toString());
+  for(int i=0;i<3;i++){
+   var unchanged=bookmarks.resume(bookmark,10,actorLogin(scope,"new-login-"+i));
+   assertThat(ids(unchanged)).isEmpty();assertThat(unchanged.get("publicationBookmark")).isEqualTo(bookmark.toString());
+   assertThat(((Map<?,?>)unchanged.get("coverage")).get("noPublicationProgress")).isEqualTo(true);
+  }
+  assertThat(sql.sql("select count(*) from ouf_ingestion.incident_publication_bookmark where tenant_id=:t").param("t",scope.tenant()).query(Long.class).single()).isEqualTo(1L);
+ }
+
+ @Test void changedCapturedMetadataCannotIssueCoverageBookmark(){
+  var scope=scope();issue(scope,"WARNING");issue(scope,"ERROR");
+  var first=bookmarks.start(scope.source(),null,1,actor(scope,1,null));
+  UUID session=UUID.fromString((String)first.get("snapshotRef"));
+  sql.sql("update ouf_ingestion.incident_read_session set state='OPEN' where session_id=:id").param("id",session).update();
+  assertStatus(409,()->bookmarks.page(UUID.fromString((String)first.get("nextCursor")),actor(scope,1,null)));
+  assertThat(sql.sql("select count(*) from ouf_ingestion.incident_publication_bookmark where tenant_id=:t").param("t",scope.tenant()).query(Long.class).single()).isZero();
  }
 
  private TrustedAuthorizationContext.Context actorLogin(Scope s,String login){

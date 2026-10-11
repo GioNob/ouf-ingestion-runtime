@@ -1,7 +1,7 @@
 -- Publication coverage positions are metadata, never operator confirmation.
 CREATE TABLE ouf_ingestion.incident_bookmark_scope(
  session_id uuid PRIMARY KEY REFERENCES ouf_ingestion.incident_read_session ON DELETE CASCADE,
- parent_token uuid
+ parent_token uuid,parent_high_watermark bigint CHECK(parent_high_watermark>=0),frame_digest text NOT NULL CHECK(frame_digest~'^[0-9a-f]{64}$')
 );
 CREATE TABLE ouf_ingestion.incident_bookmark_page(
  session_id uuid NOT NULL REFERENCES ouf_ingestion.incident_read_session ON DELETE CASCADE,

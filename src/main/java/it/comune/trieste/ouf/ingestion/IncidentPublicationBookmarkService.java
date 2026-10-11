@@ -22,7 +22,7 @@ public class IncidentPublicationBookmarkService {
  public Map<String,Object> start(String source,String state,Integer limit,TrustedAuthorizationContext.Context actor){
   requireActor(actor);
   var first=snapshots.publicationPage(source,state,limit,null,actor);
-  return bind(first,null,actor);
+  return bind(first,null,null,actor);
  }
  public Map<String,Object> resume(UUID token,Integer limit,TrustedAuthorizationContext.Context actor){
   requireActor(actor);
@@ -41,23 +41,23 @@ public class IncidentPublicationBookmarkService {
   if(Boolean.TRUE.equals(row.get("expired"))||Boolean.TRUE.equals(row.get("history_gap")))
    throw failure(HttpStatus.GONE,"ING_BOOKMARK_HISTORY_GAP");
   var first=snapshots.publicationPage((String)row.get("source_id"),(String)row.get("state"),limit,((Number)row.get("high_watermark")).longValue(),actor);
-  return bind(first,token,actor);
+  return bind(first,token,((Number)row.get("high_watermark")).longValue(),actor);
  }
  public Map<String,Object> page(UUID cursor,TrustedAuthorizationContext.Context actor){
   requireActor(actor);
   return decorate(snapshots.page(null,null,null,null,cursor,actor),actor);
  }
- private Map<String,Object> bind(Map<String,Object> first,UUID parent,TrustedAuthorizationContext.Context actor){
+ private Map<String,Object> bind(Map<String,Object> first,UUID parent,Long parentWatermark,TrustedAuthorizationContext.Context actor){
   UUID session=UUID.fromString((String)first.get("snapshotRef"));
-  transaction.executeWithoutResult(tx->sql.sql("insert into ouf_ingestion.incident_bookmark_scope(session_id,parent_token) values(:session,:parent)")
-   .param("session",session).param("parent",parent).update());
+  transaction.executeWithoutResult(tx->sql.sql("insert into ouf_ingestion.incident_bookmark_scope(session_id,parent_token,parent_high_watermark,frame_digest) values(:session,:parent,:parentWatermark,:frame)")
+   .param("session",session).param("parent",parent).param("parentWatermark",parentWatermark).param("frame",frameDigest(session)).update());
   return decorate(first,actor);
  }
  private Map<String,Object> decorate(Map<String,Object> body,TrustedAuthorizationContext.Context actor){
   UUID cursor=UUID.fromString((String)body.get("cursor"));
   return transaction.execute(tx->{
    var rows=sql.sql("""
-    select s.*,c.position,b.parent_token,s.expires_at<=clock_timestamp() as expired
+    select s.*,c.position,b.parent_token,b.parent_high_watermark,b.frame_digest,s.expires_at<=clock_timestamp() as expired
     from ouf_ingestion.incident_read_cursor c join ouf_ingestion.incident_read_session s on s.session_id=c.session_id
     join ouf_ingestion.incident_bookmark_scope b on b.session_id=s.session_id
     where c.token=:cursor and s.principal_id=:principal and s.tenant_id=:tenant
@@ -65,6 +65,7 @@ public class IncidentPublicationBookmarkService {
    if(rows.isEmpty())throw failure(HttpStatus.NOT_FOUND,"ING_BOOKMARK_SCOPE_NOT_FOUND");
    var frame=rows.getFirst();UUID session=(UUID)frame.get("session_id");
    if(Boolean.TRUE.equals(frame.get("expired")))throw failure(HttpStatus.GONE,"ING_BOOKMARK_SNAPSHOT_EXPIRED");
+   if(!Objects.equals(frame.get("frame_digest"),frameDigest(session)))throw failure(HttpStatus.CONFLICT,"ING_BOOKMARK_CAPTURE_CHANGED");
    if(frame.get("since_at")!=null)throw failure(HttpStatus.CONFLICT,"ING_BOOKMARK_TIMESTAMP_UNPROVEN");
    boolean complete=!Boolean.TRUE.equals(body.get("partial"));
    sql.sql("""
@@ -85,6 +86,7 @@ public class IncidentPublicationBookmarkService {
      int fresh=sql.sql("select count(*)::integer from ouf_ingestion.incident_bookmark_page where session_id=:id and complete").param("id",session).query(Integer.class).single();
      if(fresh!=expected)throw failure(HttpStatus.CONFLICT,"ING_BOOKMARK_COVERAGE_INCOMPLETE");
      UUID issued=issue(frame,actor);result.put("publicationBookmark",issued.toString());
+     coverage.put("noPublicationProgress",Objects.equals(frame.get("high_watermark"),frame.get("parent_high_watermark")));
      if(frame.get("parent_token")!=null)coverage.put("parentBookmark",frame.get("parent_token").toString());
     }
    }
@@ -97,6 +99,16 @@ public class IncidentPublicationBookmarkService {
   UUID session=(UUID)frame.get("session_id");
   var old=sql.sql("select token from ouf_ingestion.incident_publication_bookmark where session_id=:id").param("id",session).query(UUID.class).list();
   if(!old.isEmpty())return old.getFirst();
+  var equivalent=sql.sql("""
+   select token from ouf_ingestion.incident_publication_bookmark
+   where principal_id=:principal and tenant_id=:tenant and identity_digest=:identity and policy_ref=:policy
+     and source_id is not distinct from cast(:source as text) and state is not distinct from cast(:state as text)
+     and high_watermark=:watermark and expires_at>clock_timestamp()
+     and ((cast(:parent as uuid) is null and parent_token is null) or token=:parent)
+   order by created_at,token limit 1
+   """).param("principal",actor.subject()).param("tenant",actor.tenantId()).param("identity",identity(actor)).param("policy",frame.get("policy_ref"))
+    .param("source",frame.get("source_id")).param("state",frame.get("state")).param("watermark",frame.get("high_watermark")).param("parent",frame.get("parent_token")).query(UUID.class).list();
+  if(!equivalent.isEmpty())return equivalent.getFirst();
   sql.sql("delete from ouf_ingestion.incident_publication_bookmark where token in (select token from ouf_ingestion.incident_publication_bookmark where expires_at<=clock_timestamp() order by expires_at limit 1)").update();
   long global=sql.sql("select count(*) from ouf_ingestion.incident_publication_bookmark").query(Long.class).single();
   long tenant=sql.sql("select count(*) from ouf_ingestion.incident_publication_bookmark where tenant_id=:tenant").param("tenant",actor.tenantId()).query(Long.class).single();
@@ -114,6 +126,11 @@ public class IncidentPublicationBookmarkService {
  private static void requireActor(TrustedAuthorizationContext.Context actor){
   if(actor==null||actor.owner()==null||!actor.owner().candidates().contains(IncidentSnapshotService.CAPABILITY))
    throw failure(HttpStatus.FORBIDDEN,"ING_OPERATIONAL_NOT_AUTHORIZED");
+ }
+ private String frameDigest(UUID session){
+  String frame=sql.sql("select to_jsonb(s)::text from ouf_ingestion.incident_read_session s where session_id=:id").param("id",session).query(String.class).single();
+  try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(frame.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
+  catch(Exception invalid){throw failure(HttpStatus.CONFLICT,"ING_BOOKMARK_CAPTURE_CHANGED");}
  }
  private String identity(TrustedAuthorizationContext.Context actor){
   var p=actor.owner().principal();
