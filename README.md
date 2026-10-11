@@ -1,5 +1,8 @@
 > **Policy di piattaforma vigente:** [Resilienza, quarantena, incidenti e alert — v3](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md). Obbligatoria per sviluppo e revisione; [adozione e prove](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_ADOPTION.md).
 
+
+**Resilience v3 — prima tranche integrata:** priorità incidenti e catch-up qualificati per i perimetri MCP/Ingestion/Gateway; [prove e limiti](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_ADOPTION.md), [piano operativo](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_OPERATIONAL_RESILIENCE_PLAN.md). Cursor/memoria operatore, correlazione dipendenze e alert restano aperti.
+
 # Current resilience checkpoint — HUMAN recovery budget qualified and merged
 
 [Platform policy v2](https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md) applies by default. [PR34](https://github.com/GioNob/ouf-ingestion-runtime/pull/34) adds new finite HUMAN budgets after exhaustion, immutable history, atomic grants, worker/deadline fencing, scheduler isolation and ACK-gated issue resolution. [Implementation/profile/remaining scope](docs/HUMAN_RECOVERY_BUDGET_V1.md).35 focused tests and134 full-module tests PASS; integration/supply-chain/DR checks green on the named candidate. [Evidence](evidence/human-recovery-budget-qualified-20261011.json). No target migration/VPS apply; full automatic retry and all-module policy adoption remain open.
