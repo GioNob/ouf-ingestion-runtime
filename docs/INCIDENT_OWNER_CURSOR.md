@@ -27,3 +27,12 @@ The API exposes publication lag, baseline history gap, stable snapshot identity/
 Native tests cover late lower private sequence commit, atomic capture/publication rollback, competing publishers, immutable revisions, stable ordering/retry across later updates and service recreation, principal/tenant/policy/filter/expiry replay, row redaction/live tenant transfer, publication lag/history gap, finite capacity and governed HTTP/empty-source behavior. Existing owner/HUMAN/priority and complete module suites remain mandatory.
 
 Still under development: owner revision-based catch-up bookmarks and confirmation, global MCP vector/merge/coverage, persistent consultation receipts, current health separate from a history window, bounded historical transition compaction/retention/legal hold and ledger admission pressure. The cursor quotas above do not prove bounded incident-history storage or protected DB connection capacity. Live grants/network/deployment and populated target migration are not qualified by native fixtures. No VPS apply/restart, provider call, email or consumed R9/R10 replay is performed.
+
+
+## Qualification 2026-10-11
+
+Candidate `248b06256c2ea28236ae1bc7bdd55e3f8233d231` passed all 18 push/PR GitHub Actions workflows. PR #37 merged as `25de72ce1b01307378874ae8aef73e9f87dd0969`. PostgreSQL 17 focused run [38120034345](https://github.com/GioNob/ouf-ingestion-runtime/actions/runs/38120034345) and full module run [38120034381](https://github.com/GioNob/ouf-ingestion-runtime/actions/runs/38120034381) qualify the implementation, including authorization, concurrency, rollback and retained source/serving regressions.
+
+Each page includes `itemsDigest` over the visible item projection. A cross-owner consumer must refetch and reauthorize a saved owner page before using its offset, and reject continuation if the digest changes. A cached offset is not authorization to disclose saved incident payloads.
+
+This is owner snapshot paging, not a persistent operator consultation receipt, a production deployment, or proof of complete timestamp catch-up. Late commits are captured by pending publication, but a future persistent resume bookmark must use owner publication coverage rather than a caller timestamp.
