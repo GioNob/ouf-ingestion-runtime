@@ -10,7 +10,7 @@ A complete non-redacted captured page chain may issue one stable successor metad
 
 Versioned finite profile:90-day bookmark expiry,512 per principal,4,096 per tenant,32,768 globally; one expired bookmark cleanup per fresh issue. Existing session/page/row/response budgets remain enforced. Capacity rejects new metadata while keeping existing replay and independent incident persistence available. These are OUF-reviewed reference limits, not AWS-mandated values.
 
-All results retain consultationRecorded=false. A publicationBookmark is only a read coverage position, not proof of client delivery or human viewing. Global MCP vector/lineage, a separate explicit confirmation capability, client receipt and monotone expected-version checkpoint remain separate gates; no incident acknowledgement/resolution or recovery budget renewal is performed.
+All results retain consultationRecorded=false. A publicationBookmark is only a read coverage position, not proof of client delivery or human viewing. Global MCP vector/lineage and transport are qualified separately in PR59–61; an explicit confirmation capability, client receipt and monotone expected-version checkpoint remain open separate gates; no incident acknowledgement/resolution or recovery budget renewal is performed.
 
 Native PostgreSQL qualification covers late lower sequence publication resume, page expiry/service recreation/new login, complete versus redacted chains, replay, actor/tenant/policy fencing/missing SDK, retention floor/expired token, immutable metadata/no payload, finite persistent capacity with independent writes and concurrent issuance. Full module/source/serving/authorization/HUMAN regressions remain required.
 
@@ -23,6 +23,11 @@ Captured frame metadata has an immutable digest binding, so source/state/waterma
 
 The existing hidden incidents READ endpoint adds three disjoint modes: `{"snapshot":true,"coverage":true,"sourceId":"source","state":"OPEN","limit":50}` (optional filters/limit); `{"cursor":"canonical-nonzero-uuid","coverage":true}`; `{"resumeFrom":"canonical-nonzero-uuid","limit":50}` (optional limit). Resume inherits persisted source/state; no timestamp cutoff or revision argument. Missing, duplicated, unknown/null, mixed or noncanonical fields are rejected before owner I/O. Summary/status/history reject these modes.
 
-Current owner SDK collection/source and row authorization remain mandatory, including new login, revocation and policy drift. Spring wires the qualified bookmark core; the production adapter does not synthesize authorization. Legacy snapshots stay separate, without bookmark issuance or operator receipt. Global MCP bookmark vector and concrete client confirmation/CAS are still OPEN; consultationRecorded=false.
+Current owner SDK collection/source and row authorization remain mandatory, including new login, revocation and policy drift. Spring wires the qualified bookmark core; the production adapter does not synthesize authorization. Legacy snapshots stay separate, without bookmark issuance or operator receipt. Global MCP publication vector, composition and public transport are repository-qualified in PR59–61. Concrete client confirmation/CAS and target integration remain OPEN; consultationRecorded=false.
 
 Core PR38 qualified47 focused PostgreSQL tests and163 complete-module tests. Transport PR39 is merged after18 gates,50 focused PostgreSQL tests and166 complete-module tests. Additional HTTP tests qualify fresh login/resume, saved source inheritance, redacted/current policy page chain and malformed requests before writes. No target migration/deployment or R9/R10 operation is implied.
+
+
+## Cross-owner qualification status — 2026-10-11
+
+[MCP PR61](https://github.com/GioNob/ouf-mcp-server/pull/61) qualifies the public publication HTTP/tool path and persistent control accounting after20 gates. Historical coverage remains GATEWAY/INGESTION only; historical MCP self and other owner histories are not covered. [Current evidence and target limits](https://github.com/GioNob/ouf-deploy/blob/main/evidence/operational-publication-http-qualified-20261011.json). No client receipt, HUMAN consultation, checkpoint update, alert or production apply is implied.
