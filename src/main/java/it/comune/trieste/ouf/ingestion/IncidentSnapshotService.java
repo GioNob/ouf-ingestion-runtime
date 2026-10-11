@@ -42,12 +42,27 @@ public class IncidentSnapshotService {
     // At most four local batches, no remote I/O or retry loop. Remaining lag is explicit.
     return transaction.execute(tx->{
       for(int batch=0;batch<4;batch++)if(publish(actor.tenantId(),source)<256)break;
-      UUID first=create(source,state,since,limit,policy,actor);
+      UUID first=create(source,state,since,limit,policy,null,actor);
       return read(first,actor);
     });
   }
 
-  private UUID create(String source,String state,OffsetDateTime since,int limit,String policy,TrustedAuthorizationContext.Context actor){
+  /** Private coverage capture; the persisted lower boundary is never a tool argument. */
+  Map<String,Object> publicationPage(String source,String state,Integer requested,Long afterRevision,TrustedAuthorizationContext.Context actor){
+    if(actor.owner()==null||!actor.owner().candidates().contains(CAPABILITY))throw failure(HttpStatus.FORBIDDEN,"ING_OPERATIONAL_NOT_AUTHORIZED");
+    int limit=requested==null?50:requested;
+    if(limit<1||limit>100||(source!=null&&(source.isBlank()||source.codePointCount(0,source.length())>200))||
+       (state!=null&&!Set.of("OPEN","RECOVERING","RESOLVED").contains(state))||afterRevision!=null&&afterRevision<0)
+      throw failure(HttpStatus.BAD_REQUEST,"ING_OPERATIONAL_QUERY_INVALID");
+    String policy=requireCollection(actor,source);
+    return transaction.execute(tx->{
+      for(int batch=0;batch<4;batch++)if(publish(actor.tenantId(),source)<256)break;
+      UUID first=create(source,state,null,limit,policy,afterRevision,actor);
+      return read(first,actor);
+    });
+  }
+
+  private UUID create(String source,String state,OffsetDateTime since,int limit,String policy,Long afterRevision,TrustedAuthorizationContext.Context actor){
     boolean locked=sql.sql("select pg_try_advisory_xact_lock(hashtextextended('ouf.incident.cursor.capacity',0))").query(Boolean.class).single();
     if(!locked)throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_CURSOR_CAPACITY_UNAVAILABLE");
     sql.sql("delete from ouf_ingestion.incident_read_session where session_id in (select session_id from ouf_ingestion.incident_read_session where expires_at<=clock_timestamp() order by expires_at limit 1)").update();
@@ -60,6 +75,7 @@ public class IncidentSnapshotService {
     int available=(int)Math.min(Math.min(MAX_ITEMS,limit*MAX_PAGES),Math.min(MAX_GLOBAL_ITEMS-globalItems,MAX_TENANT_ITEMS-tenantItems));
     if(available<0)throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_CURSOR_CAPACITY_UNAVAILABLE");
     long watermark=sql.sql("select coalesce((select revision from ouf_ingestion.incident_publication_clock where tenant_id=:t),0)").param("t",actor.tenantId()).query(Long.class).single();
+    if(afterRevision!=null&&afterRevision>watermark)throw failure(HttpStatus.CONFLICT,"ING_BOOKMARK_PUBLICATION_UNPROVEN");
     boolean lag=sql.sql("select exists(select 1 from ouf_ingestion.incident_transition t join ouf_ingestion.runtime_issue i on i.issue_id=t.issue_id join ouf_ingestion.ing_run r on r.run_id=i.run_id where t.tenant_id=:tenant and r.tenant_id=:tenant and t.publication_revision is null and (cast(:source as text) is null or t.source_id=:source))").param("tenant",actor.tenantId()).param("source",source).query(Boolean.class).single();
     boolean gap=since!=null&&sql.sql("select :since<baseline_at from ouf_ingestion.incident_history_coverage where singleton").param("since",since).query(Boolean.class).single();
     UUID session=UUID.randomUUID();
@@ -69,7 +85,7 @@ public class IncidentSnapshotService {
       with latest as (
         select distinct on (t.issue_id) t.issue_id,t.body,t.observed_at,t.source_id
         from ouf_ingestion.incident_transition t
-        where t.tenant_id=:tenant and t.publication_revision<=:watermark and (cast(:source as text) is null or t.source_id=:source)
+        where t.tenant_id=:tenant and t.publication_revision<=:watermark and (cast(:after as bigint) is null or t.publication_revision>:after) and (cast(:source as text) is null or t.source_id=:source)
         order by t.issue_id,t.publication_revision desc
       ), ranked as (
         select l.*,row_number() over(order by
@@ -87,7 +103,7 @@ public class IncidentSnapshotService {
         insert into ouf_ingestion.incident_read_item(session_id,position,body)
         select :id,position::integer,body from ranked where (select n from tally)<=:available returning position
       ) select n from tally
-      """).param("tenant",actor.tenantId()).param("watermark",watermark).param("source",source).param("state",state).param("since",since).param("scan",available+1).param("available",available).param("id",session).query(Integer.class).single();
+      """).param("tenant",actor.tenantId()).param("watermark",watermark).param("after",afterRevision).param("source",source).param("state",state).param("since",since).param("scan",available+1).param("available",available).param("id",session).query(Integer.class).single();
     if(selected>available)throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_CURSOR_CAPACITY_UNAVAILABLE");
     sql.sql("update ouf_ingestion.incident_read_session set item_count=:count where session_id=:id").param("count",selected).param("id",session).update();
     return token(session,0);
@@ -140,7 +156,7 @@ public class IncidentSnapshotService {
     return result;
   }
 
-  private String requireCollection(TrustedAuthorizationContext.Context actor,String source){
+  String requireCollection(TrustedAuthorizationContext.Context actor,String source){
     var attributes=new HashMap<String,String>();attributes.put("module","INGESTION");attributes.put("detailLevel","TENANT_OPERATIONAL");if(source!=null)attributes.put("sourceRef",source);
     var decision=actor.owner().decide(CAPABILITY,new ResourceContext("operational",null,actor.tenantId(),null,attributes));
     if(!decision.allowed()||!"TENANT_OPERATIONAL".equals(decision.permittedDetailLevel()))throw failure(HttpStatus.FORBIDDEN,"ING_OPERATIONAL_NOT_AUTHORIZED");
