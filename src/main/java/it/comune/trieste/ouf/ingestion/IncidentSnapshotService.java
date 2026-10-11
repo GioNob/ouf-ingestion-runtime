@@ -69,7 +69,7 @@ public class IncidentSnapshotService {
       with latest as (
         select distinct on (t.issue_id) t.issue_id,t.body,t.observed_at,t.source_id
         from ouf_ingestion.incident_transition t
-        where t.tenant_id=:tenant and t.publication_revision<=:watermark
+        where t.tenant_id=:tenant and t.publication_revision<=:watermark and (cast(:source as text) is null or t.source_id=:source)
         order by t.issue_id,t.publication_revision desc
       ), ranked as (
         select l.*,row_number() over(order by
@@ -133,6 +133,8 @@ public class IncidentSnapshotService {
     result.put("priorityProfile","ouf.incident-priority.v1");result.put("cursorProfile",PROFILE);
     result.put("coverage",Map.of("kind","PUBLISHED_OWNER_SNAPSHOT","publicationLag",lag,"historyGap",gap));
     result.put("consultationRecorded",false);
+    try{result.put("itemsDigest",HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(result.get("items")))));}
+    catch(Exception invalid){throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_CURSOR_EVIDENCE_INVALID");}
     try{if(json.writeValueAsBytes(result).length>512<<10)throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_OPERATIONAL_RESULT_BUDGET_EXCEEDED");}
     catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw failure(HttpStatus.SERVICE_UNAVAILABLE,"ING_CURSOR_EVIDENCE_INVALID");}
     return result;
