@@ -1,0 +1,27 @@
+name: Operational priority PostgreSQL qualification
+on: [push, pull_request]
+permissions: {contents: read}
+jobs:
+  postgres17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: ouf_ingestion, POSTGRES_USER: ouf_ingestion, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf_ingestion -d ouf_ingestion" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OUF_ING_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_ingestion
+      OUF_ING_DB_USER: ouf_ingestion
+      OUF_ING_DB_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: PostgreSQL priority catch-up tenant and authorization regression
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -Dtest=OperationalPriorityRuntimeTest,OperationalOwnerAuthorizationTest,HumanRecoveryBudgetRuntimeTest test
