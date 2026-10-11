@@ -24,4 +24,4 @@ jobs:
       - name: PostgreSQL priority catch-up tenant and authorization regression
         run: |
           bash scripts/install-authorization-sdk.sh
-          mvn -B -ntp -Dtest=OperationalPriorityRuntimeTest,OperationalOwnerAuthorizationTest,HumanRecoveryBudgetRuntimeTest test
+          mvn -B -ntp -Dtest=IncidentSnapshotRuntimeTest,OperationalPriorityRuntimeTest,OperationalOwnerAuthorizationTest,HumanRecoveryBudgetRuntimeTest test
