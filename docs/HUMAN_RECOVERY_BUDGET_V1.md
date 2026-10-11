@@ -12,7 +12,7 @@ Admission counts batches atomically. Exhaustion pauses the affected run/partitio
 
 ## Qualification
 
-Candidate source branch and CI will be recorded after completion. Added native PostgreSQL tests cover human renewal after exhaustion, concurrent grants, stale-worker fencing, cumulative budgets/one issue, restart/elapsed exhaustion, late remote response without checkpoint/ACK, AI/tenant/capability denial, revoked preflight, immutable history, pressure admission and invalid policy.
+Candidate branch: resilience/human-recovery-budget-v1; [PR34](https://github.com/GioNob/ouf-ingestion-runtime/pull/34). CI results are recorded after completion. Added16 native PostgreSQL tests cover human renewal after exhaustion, concurrent grants, stale-worker fencing, cumulative budgets/one issue, restart/elapsed exhaustion, late remote response without checkpoint/ACK, AI/tenant/capability denial, revoked preflight, immutable history, pressure admission and invalid policy.
 
 ## Explicit remaining scope
 

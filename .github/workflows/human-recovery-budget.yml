@@ -9,6 +9,8 @@ on:
       - src/main/java/it/comune/trieste/ouf/ingestion/DurablePipelineRepository.java
       - src/main/java/it/comune/trieste/ouf/ingestion/CanonicalRecordPipeline.java
       - src/main/java/it/comune/trieste/ouf/ingestion/RunExecutionWorker.java
+      - src/main/java/it/comune/trieste/ouf/ingestion/RunStateRepository.java
+      - openapi/ingestion-trusted-human-v1.yaml
       - src/main/resources/db/migration/V15__human_recovery_sessions.sql
       - src/test/java/it/comune/trieste/ouf/ingestion/HumanRecoveryBudgetRuntimeTest.java
       - .github/workflows/human-recovery-budget.yml
