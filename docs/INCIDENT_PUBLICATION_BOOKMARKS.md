@@ -17,3 +17,12 @@ Native PostgreSQL qualification covers late lower sequence publication resume, p
 OPEN: public producer/global schema/transport, actual host/SDK/grants/HA and populated target migration, owner history compactor, MCP client delivery/checkpoint and actual alerts. No VPS operation, provider call, email or consumed R9/R10 replay is performed.
 
 Captured frame metadata has an immutable digest binding, so source/state/watermark/expiry/configuration drift invalidates progress even if row permissions still allow a projection. Repeated initial reads at the same logical scope/boundary reuse an anchor; unchanged resume returns its parent token with noPublicationProgress=true. These fresh authorized reads do not create duplicate bookmark records or infer consultation. Page/session and control budgets remain finite.
+
+
+## Owner HTTP coverage profile v1
+
+The existing hidden incidents READ endpoint adds three disjoint modes: `{"snapshot":true,"coverage":true,"sourceId":"source","state":"OPEN","limit":50}` (optional filters/limit); `{"cursor":"canonical-nonzero-uuid","coverage":true}`; `{"resumeFrom":"canonical-nonzero-uuid","limit":50}` (optional limit). Resume inherits persisted source/state; no timestamp cutoff or revision argument. Missing, duplicated, unknown/null, mixed or noncanonical fields are rejected before owner I/O. Summary/status/history reject these modes.
+
+Current owner SDK collection/source and row authorization remain mandatory, including new login, revocation and policy drift. Spring wires the qualified bookmark core; the production adapter does not synthesize authorization. Legacy snapshots stay separate, without bookmark issuance or operator receipt. Global MCP bookmark vector and concrete client confirmation/CAS are still OPEN; consultationRecorded=false.
+
+Core PR38 qualified47 focused PostgreSQL tests and163 complete-module tests. Additional HTTP tests qualify fresh login/resume, saved source inheritance, redacted/current policy page chain and malformed requests before writes. No target migration/deployment or R9/R10 operation is implied.
