@@ -314,6 +314,75 @@ class IncidentSnapshotRuntimeTest {
   return new TrustedAuthorizationContext.Context(s.subject(),"HUMAN",s.tenant(),owner.candidates(),owner.decisionRef(),owner);
  }
 
+
+ @Test void ownerHttpPublicationResumePreservesSavedSourceAndFreshSdkAfterNewLogin()throws Exception{
+  var scope=scope();UUID first=issue(scope,"ERROR");
+  var http=bookmarkHttp();
+  var response=http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,1,null,"login-one"))
+   .contentType("application/json").content(json.writeValueAsString(Map.of("snapshot",true,"coverage",true,"sourceId",scope.source(),"limit",1))))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.consultationRecorded").value(false)).andReturn();
+  var body=json.readValue(response.getResponse().getContentAsString(),Map.class);
+  String bookmark=(String)body.get("publicationBookmark");assertThat(bookmark).isNotBlank();
+  UUID later=issue(scope,"WARNING");
+  http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,1,null,"login-two"))
+   .contentType("application/json").content(json.writeValueAsString(Map.of("resumeFrom",bookmark,"limit",1))))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(1))
+   .andExpect(jsonPath("$.items[0].incident_id").value(later.toString()))
+   .andExpect(jsonPath("$.coverage.parentBookmark").value(bookmark))
+   .andExpect(jsonPath("$.consultationRecorded").value(false));
+  assertThat(later).isNotEqualTo(first);
+ }
+
+ @Test void ownerHttpCoveragePageRedactionRevocationAndPolicyRemainCurrent()throws Exception{
+  var scope=scope();UUID a=issue(scope,"ERROR"),b=issue(scope,"WARNING");
+  var http=bookmarkHttp();
+  var response=http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,1,null,"same-login"))
+   .contentType("application/json").content(json.writeValueAsString(Map.of("snapshot",true,"coverage",true,"sourceId",scope.source(),"limit",1))))
+   .andExpect(status().isOk()).andExpect(jsonPath("$.publicationBookmark").doesNotExist()).andReturn();
+  var first=json.readValue(response.getResponse().getContentAsString(),Map.class);
+  String cursor=(String)first.get("nextCursor"),request=json.writeValueAsString(Map.of("cursor",cursor,"coverage",true));
+  http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,1,b,"same-login"))
+    .contentType("application/json").content(request)).andExpect(status().isOk())
+    .andExpect(jsonPath("$.partial").value(true)).andExpect(jsonPath("$.publicationBookmark").doesNotExist());
+  http.perform(post("/api/internal/v1/ingestion/operations/incidents").contentType("application/json").content(request)).andExpect(status().isForbidden());
+  http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,2,null,"same-login"))
+    .contentType("application/json").content(request)).andExpect(status().isConflict());
+  http.perform(post("/api/internal/v1/ingestion/operations/incidents").with(httpActor(scope,1,null,"same-login"))
+    .contentType("application/json").content(request)).andExpect(status().isOk()).andExpect(jsonPath("$.publicationBookmark").isString());
+ }
+
+ @Test void ownerHttpBookmarkQueriesAreClosedBeforeAnyOwnerRead()throws Exception{
+  var scope=scope();var http=bookmarkHttp();String token="11111111-aaaa-4111-8111-111111111111";
+  var invalid=List.of(
+    Map.of("coverage",true),Map.of("snapshot",true,"coverage",false),
+    Map.of("snapshot",true,"coverage",true,"since","2026-10-11T00:00:00Z"),
+    Map.of("resumeFrom",token,"sourceId",scope.source()),Map.of("resumeFrom",token,"state","OPEN"),
+    Map.of("resumeFrom",token,"coverage",true),Map.of("resumeFrom",token,"cursor",token),
+    Map.of("cursor",token,"coverage",true,"limit",1),Map.of("resumeFrom",token.toUpperCase()),
+    Map.of("resumeFrom","00000000-0000-0000-0000-000000000000"),Map.of("revision",1),Map.of("limit",true));
+  for(var query:invalid)http.perform(post("/api/internal/v1/ingestion/operations/incidents").contentType("application/json")
+    .content(json.writeValueAsString(query))).andExpect(status().isBadRequest());
+  for(String raw:List.of("{\"resumeFrom\":null}","{\"resumeFrom\":\""+token+"\",\"resumeFrom\":\""+token+"\"}"))
+   http.perform(post("/api/internal/v1/ingestion/operations/incidents").contentType("application/json").content(raw)).andExpect(status().isBadRequest());
+  for(String route:List.of("summary","status","history"))http.perform(post("/api/internal/v1/ingestion/operations/"+route)
+   .contentType("application/json").content("{\"snapshot\":true,\"coverage\":true}")).andExpect(status().isBadRequest());
+  assertThat(sql.sql("select count(*) from ouf_ingestion.incident_read_session where tenant_id=:tenant")
+    .param("tenant",scope.tenant()).query(Long.class).single()).isZero();
+ }
+
+ private org.springframework.test.web.servlet.MockMvc bookmarkHttp(){
+  return org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+    new OperationalAwarenessApi(projection,org.mockito.Mockito.mock(RuntimeIssueService.class),new TrustedAuthorizationContext(),snapshots,bookmarks)).build();
+ }
+ private org.springframework.test.web.servlet.request.RequestPostProcessor httpActor(Scope scope,long version,UUID denied,String login){
+  return request->{
+    var verified=boundRequest(scope,version,denied);
+    request.setUserPrincipal(new TrustedPrincipal(new PrincipalContext(scope.subject(),scope.tenant(),PrincipalContext.ActorType.HUMAN,null,login,"cursor-issuer","cursor-audience",Set.of(IncidentSnapshotService.CAPABILITY))));
+    request.getServletContext().setAttribute(ServletAuthorization.RUNTIME,verified.getServletContext().getAttribute(ServletAuthorization.RUNTIME));
+    return request;
+  };
+ }
+
  private Scope scope(){
   String tenant="cursor-"+UUID.randomUUID(),source="source-"+UUID.randomUUID();UUID run=UUID.randomUUID();
   sql.sql("insert into ouf_ingestion.ing_run(run_id,tenant_id,source_id,bundle_id,bundle_version,bundle_checksum,mode,state,correlation_id) values(:id,:tenant,:source,'cursor-bundle','1','sha256:cursor','DELTA','RUNNING','cursor-correlation')")
