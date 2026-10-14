@@ -46,12 +46,13 @@ def launch(name,args,env):
 
 def classpath(path):return str(path/'target/test-classes')+':'+str(path/'target/classes')+':'+(path/'target/r2-classpath.txt').read_text().strip()
 def timestamp(delta=0):return (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=delta)).isoformat().replace('+00:00','Z')
-capabilities={'ouf.managed-source.onboarding.create':'COMMAND','ouf.managed-source.onboarding.review.prepare':'COMMAND','ouf.managed-source.onboarding.read':'READ','urban.object.search':'SEARCH','ouf.semantic.propose':'COMMAND','ouf.semantic.review.prepare':'COMMAND','ouf.semantic.approval.request':'COMMAND','ouf.semantic.proposal.read':'READ','ouf.semantic.read':'READ','ouf.semantic.consultation.read':'READ'}
+capabilities={'ouf.managed-source.onboarding.create':'COMMAND','ouf.managed-source.onboarding.review.prepare':'COMMAND','ouf.managed-source.onboarding.read':'READ','urban.object.search':'SEARCH','ouf.semantic.propose':'COMMAND','ouf.semantic.review.prepare':'COMMAND','ouf.semantic.approval.request':'COMMAND','ouf.semantic.proposal.read':'READ','ouf.semantic.consultation.read':'READ'}
+scopes=list(capabilities)+['ouf.semantic.read']
 bundle={'bundleId':'vertical-mcp-fixture','version':1,'publishedAt':timestamp(),'capabilities':[{'capabilityId':cap,'operation':operation,'requiredScope':'ouf.semantic.read' if cap=='ouf.semantic.consultation.read' else cap,'allowedActors':['HUMAN']} for cap,operation in capabilities.items()],'grants':[{'grantId':'fixture:'+cap,'capabilityId':cap,'tenantId':'tenant-a','subjectId':'fixture-human','validFrom':timestamp(-60),'validUntil':timestamp(3600)} for cap in capabilities]}
 policy={'contentHash':hashlib.sha256(compact(bundle)).hexdigest(),'bundleId':bundle['bundleId'],'bundleVersion':1,'activatedAt':timestamp(),'bundle':bundle}
 
 def receipt(raw,path,cap,idempotency,kind="managed-file"):
- now=int(time.time());item={'v':1,'purpose':kind+'-owner','method':'POST','path':path,'bodyHash':hashlib.sha256(raw).hexdigest(),'capability':cap,'iat':now,'exp':now+25,'issuer':'fixture-issuer','audience':'fixture-audience','workload':'ouf-mcp-server','subject':'fixture-human','tenant':'tenant-a','acr':'fixture-authentication','roles':'','scope':' '.join(capabilities),'idempotencyKey':idempotency}
+ now=int(time.time());item={'v':1,'purpose':kind+'-owner','method':'POST','path':path,'bodyHash':hashlib.sha256(raw).hexdigest(),'capability':cap,'iat':now,'exp':now+25,'issuer':'fixture-issuer','audience':'fixture-audience','workload':'ouf-mcp-server','subject':'fixture-human','tenant':'tenant-a','acr':'fixture-authentication','roles':'','scope':' '.join(scopes),'idempotencyKey':idempotency}
  if kind=='semantic-proposal':item['actor']='HUMAN'
  if kind=='semantic-read':item.pop('idempotencyKey')
  encoded=base64.urlsafe_b64encode(compact(item)).rstrip(b'=')
@@ -120,7 +121,7 @@ class Gateway(BaseHTTPRequestHandler):
 server=ThreadingHTTPServer(('127.0.0.1',18132),Gateway);threading.Thread(target=server.serve_forever,daemon=True).start()
 
 def tool(name,args,expected_error=None):
- headers={'Mcp-Protocol-Version':'2026-07-28','Mcp-Method':'tools/call','Accept':'application/json, text/event-stream','X-OUF-Gateway-Verified':'true','X-OUF-Delegation':'fixture-human-delegation','X-OUF-Service-Principal':'ouf-chatgpt','X-OUF-Principal-ID':'fixture-human','X-OUF-Tenant-ID':'tenant-a','X-OUF-Actor-Type':'HUMAN','X-OUF-Authentication-Context-Ref':'1','X-OUF-Token-Issuer':'fixture-issuer','X-OUF-Token-Audience':'fixture-audience','X-OUF-Granted-Scopes':' '.join(capabilities),'X-Correlation-ID':str(uuid.uuid4()),'Idempotency-Key':'fixture:'+str(uuid.uuid4())}
+ headers={'Mcp-Protocol-Version':'2026-07-28','Mcp-Method':'tools/call','Accept':'application/json, text/event-stream','X-OUF-Gateway-Verified':'true','X-OUF-Delegation':'fixture-human-delegation','X-OUF-Service-Principal':'ouf-chatgpt','X-OUF-Principal-ID':'fixture-human','X-OUF-Tenant-ID':'tenant-a','X-OUF-Actor-Type':'HUMAN','X-OUF-Authentication-Context-Ref':'1','X-OUF-Token-Issuer':'fixture-issuer','X-OUF-Token-Audience':'fixture-audience','X-OUF-Granted-Scopes':' '.join(scopes),'X-Correlation-ID':str(uuid.uuid4()),'Idempotency-Key':'fixture:'+str(uuid.uuid4())}
  result=request('http://127.0.0.1:18136/mcp',{'jsonrpc':'2.0','id':str(uuid.uuid4()),'method':'tools/call','params':{'name':name,'arguments':args}},human,headers)
  if 'error' in result:raise RuntimeError('MCP '+name+' '+json.dumps(result['error']))
  content=result['result']

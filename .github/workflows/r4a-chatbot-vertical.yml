@@ -22,8 +22,8 @@ jobs:
       SEMANTIC_ROOT: ${{ github.workspace }}/.pairwise/semantic
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
       MCP_ROOT: ${{ github.workspace }}/.pairwise/mcp
-      R4A_ONBOARDING_SHA: adaa4c71ef4599d7735cb460f4b870371950d85c
-      R4A_SEMANTIC_SHA: 95d5e4dbb8f11e536c99ba0f5c4196e6158bf46a
+      R4A_ONBOARDING_SHA: 1fc148969ac65b5c0130a7bae3be8637a1dbabc7
+      R4A_SEMANTIC_SHA: b896ef583c4813a07a4753b0376b1b0fae756f8c
       R4A_UDP_SHA: d683f12d8acd30f13e1dbae0f3f47501b771a8b8
       R4A_MCP_SHA: 1323f9e3fb35d96fd0ac5d1b17bcc3a80268ec64
       PGPASSWORD: ci-only-password
@@ -35,12 +35,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: adaa4c71ef4599d7735cb460f4b870371950d85c
+          ref: 1fc148969ac65b5c0130a7bae3be8637a1dbabc7
           path: .pairwise/onboarding
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: GioNob/ouf-semantic-registry
-          ref: 95d5e4dbb8f11e536c99ba0f5c4196e6158bf46a
+          ref: b896ef583c4813a07a4753b0376b1b0fae756f8c
           path: .pairwise/semantic
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
