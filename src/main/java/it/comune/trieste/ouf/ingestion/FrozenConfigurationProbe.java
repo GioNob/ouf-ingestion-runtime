@@ -31,7 +31,7 @@ public final class FrozenConfigurationProbe {
     }
     var semantic=PublishedActivation.map(configuration,"semanticMapping");
     Object refs=semantic.get("semanticRefs");
-    if(!(refs instanceof List<?> list)||list.isEmpty()||list.size()>20||list.stream().anyMatch(x->!(x instanceof String s)||!s.matches("[^@\\s]+@[^@\\s]+"))||new HashSet<>(list).size()!=list.size())throw invalid("ING_PREFLIGHT_EXACT_REF_REQUIRED");
+    if(!(refs instanceof List<?> list)||list.isEmpty()||list.size()>PublicationGatewayClient.MAX_SEMANTIC_REFERENCES||list.stream().anyMatch(x->!(x instanceof String s)||!s.matches("[^@\\s]+@[^@\\s]+"))||new HashSet<>(list).size()!=list.size())throw invalid("ING_PREFLIGHT_EXACT_REF_REQUIRED");
     published.put("semanticRefs",refs);
     String bundleId=PublishedActivation.text(template,"bundleId");
     Object rawVersion=template.getOrDefault("bundleVersion",candidate.get("version"));
