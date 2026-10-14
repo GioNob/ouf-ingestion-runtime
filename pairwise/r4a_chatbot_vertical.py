@@ -7,7 +7,7 @@ repos={k:pathlib.Path(os.environ[k+'_ROOT']).resolve() for k in ('ONBOARDING','S
 evidence=root/'target/r4a-chatbot-evidence';evidence.mkdir(parents=True,exist_ok=True)
 token,human,key=(secrets.token_hex(32) for _ in range(3));tokenfile=evidence/'workload.token';tokenfile.write_text(token);tokenfile.chmod(0o600)
 keyfile=evidence/'owner-receipt.key';keyfile.write_text(key);keyfile.chmod(0o600)
-processes=[];logs=[];checks=[];calls={};captures=[];acks=[];readiness=[];coverage=[]
+processes=[];logs=[];checks=[];calls={};captures=[];acks=[];readiness=[];coverage=[];boundary_errors=[]
 semantic_key=pathlib.Path('/etc/ouf-fixture/semantic-proposal-'+os.environ.get('GITHUB_RUN_ID','local')+'.key')
 proposal=json.loads((repos['SEMANTIC']/'src/test/resources/teatri-reuse-semantic-proposal-20261014.json').read_text())
 fields=proposal['mappingBlueprint']['fields']
@@ -124,7 +124,8 @@ class Gateway(BaseHTTPRequestHandler):
     if path.path=='/api/trusted-human/v1/ingestion/onboarding-readiness':readiness.append(json.loads(body))
     if path.path=='/api/udp/v1/governance/identity/preflight':coverage.append(json.loads(body))
     self.reply(response.status,body)
-  except urllib.error.HTTPError as e:self.reply(e.code,e.read(65536))
+  except urllib.error.HTTPError as e:
+   body=e.read(65536);boundary_errors.append({'path':path.path,'status':e.code,'body':body.decode(errors='replace')[:2048]});self.reply(e.code,body)
   except Exception as e:self.reply(502,compact({'code':'FIXTURE_GATEWAY_FAILURE','detail':str(e)[:512]}))
 server=ThreadingHTTPServer(('127.0.0.1',18132),Gateway);threading.Thread(target=server.serve_forever,daemon=True).start()
 
@@ -249,7 +250,7 @@ try:
  (evidence/'summary.json').write_text(json.dumps({'status':'PASS','checks':checks,'calls':calls,'baseline':baseline,'incoming':incoming,'baselineObjectId':baseline_id,'cohort':{k:os.environ.get(k+'_SHA') for k in ('R4A_ONBOARDING','R4A_SEMANTIC','R4A_UDP','R4A_MCP')}|{'ingestion':os.environ.get('GITHUB_SHA')},'level':'FOUR_REAL_OWNER_JVMS_REAL_MCP_POSTGRES_MINIO','limitations':['Disposable synthetic CSV rows with the real 20-field semantic proposal; not the user VPS asset or its 13 rows','Gateway mediation, browser sign-in and IAM are explicitly declared test fixtures; semantic/source proposal and HUMAN owner actions use actual HTTP APIs','Raw CSV registration/profile uses real owner services behind a fixture transport; host chat attachment/picker tested separately','No production authority or runtime acceptance issued']},indent=2))
 finally:
  (evidence/'mcp-transcript.json').write_text(json.dumps(captures,indent=2))
- (evidence/'boundary-receipts.json').write_text(json.dumps({'checksCompleted':checks,'readiness':readiness,'coverage':coverage,'handoffAcks':acks},indent=2))
+ (evidence/'boundary-receipts.json').write_text(json.dumps({'checksCompleted':checks,'readiness':readiness,'coverage':coverage,'handoffAcks':acks,'dependencyErrors':boundary_errors},indent=2))
  for p in reversed(processes):
   p.terminate()
   try:p.wait(timeout=15)
