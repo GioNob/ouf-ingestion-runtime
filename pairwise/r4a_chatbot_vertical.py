@@ -58,6 +58,11 @@ def receipt(raw,path,cap,idempotency,kind="managed-file"):
  encoded=base64.urlsafe_b64encode(compact(item)).rstrip(b'=')
  mac=hmac.new(key.encode(),('ouf-'+kind+'-owner-v1.').encode()+encoded,hashlib.sha256).digest()
  return (encoded+b'.'+base64.urlsafe_b64encode(mac).rstrip(b'=')).decode()
+def search_receipt(raw,envelope):
+ now=int(time.time());identity=envelope['Identity']
+ item={'v':1,'purpose':'udp-object-search-owner','method':'POST','path':'/api/udp/v1/objects/search','bodyHash':hashlib.sha256(raw).hexdigest(),'capability':envelope['CapabilityID'],'correlationId':envelope['CorrelationID'],'iat':now,'exp':now+25,'issuer':'fixture-issuer','audience':'fixture-audience','workload':'ouf-mcp-server','subject':identity['PrincipalID'],'tenant':identity['TenantID'],'client':identity['ServicePrincipalID'],'acr':'fixture-authentication','roles':'','scope':' '.join(scopes),'requestHash':envelope['RequestHash']}
+ encoded=base64.urlsafe_b64encode(compact(item)).rstrip(b'=');mac=hmac.new(key.encode(),b'ouf-udp-search-owner-v1.'+encoded,hashlib.sha256).digest()
+ return (encoded+b'.'+base64.urlsafe_b64encode(mac).rstrip(b'=')).decode()
 class Gateway(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
  def reply(self,status,body,content='application/json'):
@@ -102,6 +107,7 @@ class Gateway(BaseHTTPRequestHandler):
      headers['X-OUF-Semantic-Read-Receipt']=receipt(raw,owner,cap,envelope['IdempotencyKey'],'semantic-read');headers['Authorization']='Bearer '+human
     elif cap=='urban.object.search':
      upstream='http://127.0.0.1:18134/api/udp/v1/objects/search';raw=compact(envelope['Arguments']);headers['Authorization']='Bearer '+human
+     headers['X-OUF-UDP-Search-Receipt']=search_receipt(raw,envelope)
     else:
      modes={'ouf.managed-source.onboarding.create':'create','ouf.managed-source.onboarding.review.prepare':'review-prepare','ouf.managed-source.onboarding.read':'review-read'}
      if cap not in modes:self.send_error(404);return
@@ -159,7 +165,7 @@ try:
  wait(lambda:request('http://127.0.0.1:18135/actuator/health')['status']=='UP')
  launch('onboarding',['java','-cp',classpath(repos['ONBOARDING']),'it.comune.trieste.ouf.pairwise.ChatbotVerticalPublisherFixture','--server.port=18131','--ouf.runtime-publications.tenant-id=tenant-a','--ouf.authorization.ths.public-origin=https://ths.fixture.invalid','--ouf.authorization.delegation.key-file='+str(keyfile),'--ouf.iam.issuer=fixture-issuer','--ouf.iam.audience=fixture-audience','--ouf.onboarding.udp-identity.gateway-url=http://127.0.0.1:18132','--ouf.onboarding.udp-identity.token-file='+str(tokenfile)],env)
  wait(lambda:(evidence/'assets.json').exists());assets=json.loads((evidence/'assets.json').read_text())['assets']
- launch('udp',['java','-cp',classpath(repos['UDP']),'it.comune.trieste.ouf.pairwise.ServingConsumerFixture','--server.port=18134','--ouf.udp.execution.enabled=true','--ouf.udp.execution.gateway-url=http://127.0.0.1:18132','--ouf.udp.execution.token-file='+str(tokenfile),'--ouf.udp.lake.tenant-id=tenant-a','--ouf.udp.lake.required=true','--ouf.udp.lake.raw-retention-days=30','--ouf.udp.lake.raw-retention-class=OPERATIONAL','--ouf.udp.lake.raw-access-label=RESTRICTED','--ouf.udp.lake.s3.bucket=r2b-lake','--ouf.udp.lake.s3.endpoint=http://127.0.0.1:9000','--ouf.udp.lake.s3.path-style=true'],env)
+ launch('udp',['java','-cp',classpath(repos['UDP']),'it.comune.trieste.ouf.pairwise.ServingConsumerFixture','--server.port=18134','--ouf.udp.execution.enabled=true','--ouf.udp.execution.gateway-url=http://127.0.0.1:18132','--ouf.udp.execution.token-file='+str(tokenfile),'--ouf.udp.search.tenant-id=tenant-a','--ouf.udp.search.issuer=fixture-issuer','--ouf.udp.search.audience=fixture-audience','--ouf.udp.search.workload=ouf-mcp-server','--ouf.udp.search.owner-key-file='+str(keyfile),'--ouf.udp.lake.tenant-id=tenant-a','--ouf.udp.lake.required=true','--ouf.udp.lake.raw-retention-days=30','--ouf.udp.lake.raw-retention-class=OPERATIONAL','--ouf.udp.lake.raw-access-label=RESTRICTED','--ouf.udp.lake.s3.bucket=r2b-lake','--ouf.udp.lake.s3.endpoint=http://127.0.0.1:9000','--ouf.udp.lake.s3.path-style=true'],env)
  wait(lambda:request('http://127.0.0.1:18134/actuator/health')['status']=='UP')
  mcp_env=dict(env,MCP_DATABASE_URL='postgres://ouf:'+os.environ['PGPASSWORD']+'@127.0.0.1:5432/ouf?sslmode=disable',MCP_WORKLOAD_TOKEN=token,MCP_FINGERPRINT_KEY=secrets.token_hex(32),MCP_AUTHORIZATION_BUNDLE_ENDPOINT='http://127.0.0.1:18132/fixture/policy',MCP_GATEWAY_ENDPOINT='http://127.0.0.1:18132/internal/capabilities/v1/execute')
  mcp_bin=str(repos['MCP']/'build/ouf-mcp');subprocess.run([mcp_bin,'migrate'],env=mcp_env,check=True,timeout=60)
