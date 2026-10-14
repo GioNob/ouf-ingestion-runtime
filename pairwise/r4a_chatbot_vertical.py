@@ -121,8 +121,8 @@ class Gateway(BaseHTTPRequestHandler):
 server=ThreadingHTTPServer(('127.0.0.1',18132),Gateway);threading.Thread(target=server.serve_forever,daemon=True).start()
 
 def tool(name,args,expected_error=None):
- headers={'Mcp-Protocol-Version':'2026-07-28','Mcp-Method':'tools/call','Accept':'application/json, text/event-stream','X-OUF-Gateway-Verified':'true','X-OUF-Delegation':'fixture-human-delegation','X-OUF-Service-Principal':'ouf-chatgpt','X-OUF-Principal-ID':'fixture-human','X-OUF-Tenant-ID':'tenant-a','X-OUF-Actor-Type':'HUMAN','X-OUF-Authentication-Context-Ref':'1','X-OUF-Token-Issuer':'fixture-issuer','X-OUF-Token-Audience':'fixture-audience','X-OUF-Granted-Scopes':' '.join(scopes),'X-Correlation-ID':str(uuid.uuid4()),'Idempotency-Key':'fixture:'+str(uuid.uuid4())}
- result=request('http://127.0.0.1:18136/mcp',{'jsonrpc':'2.0','id':str(uuid.uuid4()),'method':'tools/call','params':{'name':name,'arguments':args}},human,headers)
+ headers={'Mcp-Protocol-Version':'2026-07-28','Mcp-Method':'tools/call','Mcp-Name':name,'Accept':'application/json, text/event-stream','X-OUF-Gateway-Verified':'true','X-OUF-Delegation':'fixture-human-delegation','X-OUF-Service-Principal':'ouf-chatgpt','X-OUF-Principal-ID':'fixture-human','X-OUF-Tenant-ID':'tenant-a','X-OUF-Actor-Type':'HUMAN','X-OUF-Authentication-Context-Ref':'1','X-OUF-Token-Issuer':'fixture-issuer','X-OUF-Token-Audience':'fixture-audience','X-OUF-Granted-Scopes':' '.join(scopes),'X-Correlation-ID':str(uuid.uuid4()),'Idempotency-Key':'fixture:'+str(uuid.uuid4())}
+ result=request('http://127.0.0.1:18136/mcp',{'jsonrpc':'2.0','id':str(uuid.uuid4()),'method':'tools/call','params':{'_meta':{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{},'io.modelcontextprotocol/clientInfo':{'name':'ouf-disposable-vertical','version':'1'}},'name':name,'arguments':args}},human,headers)
  if 'error' in result:raise RuntimeError('MCP '+name+' '+json.dumps(result['error']))
  content=result['result']
  if content.get('isError'):

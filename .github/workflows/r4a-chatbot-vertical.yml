@@ -22,7 +22,7 @@ jobs:
       SEMANTIC_ROOT: ${{ github.workspace }}/.pairwise/semantic
       UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
       MCP_ROOT: ${{ github.workspace }}/.pairwise/mcp
-      R4A_ONBOARDING_SHA: 6b4df4831df5743caf18dc88dbd23525e2ff38d0
+      R4A_ONBOARDING_SHA: e700ef9e39b7de8396d1d704d4155649812b5643
       R4A_SEMANTIC_SHA: 039f044f6063bc37b4e04b189b95b0b234ae1de5
       R4A_UDP_SHA: d683f12d8acd30f13e1dbae0f3f47501b771a8b8
       R4A_MCP_SHA: 1323f9e3fb35d96fd0ac5d1b17bcc3a80268ec64
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: GioNob/ouf-source-onboarding
-          ref: 6b4df4831df5743caf18dc88dbd23525e2ff38d0
+          ref: e700ef9e39b7de8396d1d704d4155649812b5643
           path: .pairwise/onboarding
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
