@@ -122,7 +122,13 @@ class Gateway(BaseHTTPRequestHandler):
   except Exception as e:self.reply(502,compact({'code':'FIXTURE_GATEWAY_FAILURE','detail':str(e)[:512]}))
 server=ThreadingHTTPServer(('127.0.0.1',18132),Gateway);threading.Thread(target=server.serve_forever,daemon=True).start()
 
+last_tool_start=None
 def tool(name,args,expected_error=None):
+ global last_tool_start
+ # Respect the existing shared three-call/minute business window. No retry,
+ # identity change, budget mutation or attempt reset is used by this client.
+ if last_tool_start is not None:time.sleep(max(0,21-(time.monotonic()-last_tool_start)))
+ last_tool_start=time.monotonic()
  headers={'Mcp-Protocol-Version':'2026-07-28','Mcp-Method':'tools/call','Mcp-Name':name,'Accept':'application/json, text/event-stream','X-OUF-Gateway-Verified':'true','X-OUF-Delegation':'fixture-human-delegation','X-OUF-Service-Principal':'ouf-chatgpt','X-OUF-Principal-ID':'fixture-human','X-OUF-Tenant-ID':'tenant-a','X-OUF-Actor-Type':'HUMAN','X-OUF-Authentication-Context-Ref':'1','X-OUF-Token-Issuer':'fixture-issuer','X-OUF-Token-Audience':'fixture-audience','X-OUF-Granted-Scopes':' '.join(scopes),'X-Correlation-ID':str(uuid.uuid4()),'Idempotency-Key':'fixture:'+str(uuid.uuid4())}
  result=request('http://127.0.0.1:18136/mcp',{'jsonrpc':'2.0','id':str(uuid.uuid4()),'method':'tools/call','params':{'_meta':{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{},'io.modelcontextprotocol/clientInfo':{'name':'ouf-disposable-vertical','version':'1'}},'name':name,'arguments':args}},human,headers)
  if 'error' in result:raise RuntimeError('MCP '+name+' '+json.dumps(result['error']))

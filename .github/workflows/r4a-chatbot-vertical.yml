@@ -96,6 +96,7 @@ jobs:
         if: always()
         run: |
           if test -f target/r4a-chatbot-evidence/summary.json; then cat target/r4a-chatbot-evidence/summary.json; fi
+          if test -f target/r4a-chatbot-evidence/boundary-receipts.json; then cat target/r4a-chatbot-evidence/boundary-receipts.json; fi
           for log in target/r4a-chatbot-evidence/*.log; do if test -f "$log"; then tail -n 90 "$log"; fi; done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

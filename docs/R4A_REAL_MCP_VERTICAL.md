@@ -11,3 +11,5 @@ The baseline contains one 19-field object. The incoming CSV contains the same 19
 This is disposable integration qualification. The CSV rows are synthetic; they are not the VPS Teatri asset or its 13 rows. IAM, Gateway mediation, source-byte transport and HUMAN authentication are named fixture boundaries. Chat attachment/picker and browser sign-in have their own tests. Neither a CI PASS nor source publication grants production runtime authority or proves the target deployment.
 
 Each owner is built against its own pinned vendored Authorization SDK. Its runtime and test SDK JARs are retained in a separate classpath directory before another owner can overwrite the shared Maven coordinate. Identity fixtures are excluded from all production artifacts.
+
+The test client spaces tool calls by at least 21 seconds to respect the existing shared business admission limit of three calls per minute. It does not retry rejected calls, alter identities, reset attempts or change server budgets; finite admission and equivalence guards remain active throughout the composed run.
