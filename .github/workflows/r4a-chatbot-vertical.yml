@@ -1,0 +1,92 @@
+name: R4a real MCP managed CSV vertical
+on:
+  push:
+    paths: ['pairwise/r4a_chatbot_vertical.py', '.github/workflows/r4a-chatbot-vertical.yml']
+  pull_request:
+    paths: ['pairwise/r4a_chatbot_vertical.py', '.github/workflows/r4a-chatbot-vertical.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  five-process-vertical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5-alpine
+        env: {POSTGRES_DB: ouf, POSTGRES_USER: ouf, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf -d ouf" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      ONBOARDING_ROOT: ${{ github.workspace }}/.pairwise/onboarding
+      SEMANTIC_ROOT: ${{ github.workspace }}/.pairwise/semantic
+      UDP_ROOT: ${{ github.workspace }}/.pairwise/udp
+      MCP_ROOT: ${{ github.workspace }}/.pairwise/mcp
+      R4A_ONBOARDING_SHA: 266db78f1cf315ee8b9e3025239bd8335a43fa3e
+      R4A_SEMANTIC_SHA: 406a3f2443f497a771738c9c557e0700872b56eb
+      R4A_UDP_SHA: 234fba10ca3f884ecda75a36db1b8eb5564af000
+      R4A_MCP_SHA: f5b728166b6e529694e88685a64de6b31a451e2d
+      PGPASSWORD: ci-only-password
+      AWS_ACCESS_KEY_ID: minio-ci-access
+      AWS_SECRET_ACCESS_KEY: minio-ci-secret
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: 266db78f1cf315ee8b9e3025239bd8335a43fa3e
+          path: .pairwise/onboarding
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-semantic-registry
+          ref: 406a3f2443f497a771738c9c557e0700872b56eb
+          path: .pairwise/semantic
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-udp-object-resolution
+          ref: 234fba10ca3f884ecda75a36db1b8eb5564af000
+          path: .pairwise/udp
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-mcp-server
+          ref: f5b728166b6e529694e88685a64de6b31a451e2d
+          path: .pairwise/mcp
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with: {go-version: '1.26.9', cache-dependency-path: .pairwise/mcp/go.sum}
+      - name: Start real object storage
+        run: |
+          docker run -d --name r4a-minio -p 9000:9000 -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" "$(bash scripts/ci/build-pinned-minio-image.sh)" server /data
+          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0; sleep 1; done
+          exit 1
+      - name: Build exact cohort and isolated identity fixtures
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
+          mvn -B -ntp -f .pairwise/onboarding/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          mvn -B -ntp -f .pairwise/udp/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          mvn -B -ntp -f .pairwise/semantic/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          cd .pairwise/mcp
+          go build -trimpath -o build/ouf-mcp ./cmd/ouf-mcp
+      - name: Keep fixture identities out of production artifacts
+        run: |
+          if jar tf .pairwise/onboarding/target/source-onboarding-*.jar | grep -q ChatbotVerticalPublisherFixture; then exit 1; fi
+          if jar tf .pairwise/semantic/target/semantic-registry-*.jar | grep -q GovernedPublicationFixture; then exit 1; fi
+          if jar tf .pairwise/udp/target/udp-object-resolution-*.jar | grep -q ServingConsumerFixture; then exit 1; fi
+      - name: Verify real MCP review, activation, merge commit and search
+        run: timeout --signal=TERM --kill-after=20s 12m python3 pairwise/r4a_chatbot_vertical.py
+      - name: Print bounded diagnostics
+        if: always()
+        run: |
+          if test -f target/r4a-chatbot-evidence/summary.json; then cat target/r4a-chatbot-evidence/summary.json; fi
+          for log in target/r4a-chatbot-evidence/*.log; do if test -f "$log"; then tail -n 90 "$log"; fi; done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r4a-real-mcp-vertical-${{ github.run_id }}
+          path: |
+            target/r4a-chatbot-evidence/*.log
+            target/r4a-chatbot-evidence/*.json
+          retention-days: 30

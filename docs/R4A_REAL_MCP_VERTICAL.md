@@ -1,0 +1,11 @@
+# R4a managed CSV through the real MCP process
+
+The dedicated workflow reuses R2c's four Java applications, PostgreSQL and MinIO, and adds the real MCP executable. Owner repositories and third-party Actions are pinned to exact commits. Existing R2c acceptance remains separate.
+
+The fixture loads the reviewed 20-field Teatri RDF proposal through the actual Registry imported-proposal and validation services, with an explicitly synthetic HUMAN approval/publication. It profiles disposable CSV bytes through the real Onboarding profiler, then calls real MCP `source.onboarding.create`, `source.onboarding.review.prepare` and `source.onboarding.read`. A purpose-bound signed test Gateway receipt reaches the actual owner APIs; no test controller substitutes their lifecycle.
+
+The runner executes the production frozen compatibility probe against every CSV row. Only its PASS result is followed by an explicit SERVICE attestation. Real UDP identity preflight proves current coverage. The HUMAN owner API then confirms and activates the exact configuration. The production Ingestion activation poller discovers the resulting publication and creates/runs work; the test never inserts an ingestion run or invokes a hidden run trigger.
+
+The baseline contains one 19-field object. The incoming CSV contains the same 19 canonical values plus one newly exposed property and a fully distinct second row. Thus actual complete-canonical-comparison semantics can match the first row to the existing object and commit a new revision, while creating the distinct object. The test verifies object count, retained original identity, both source bindings, increased revision count, three durable handoffs and authorized lineage from both sources. It finally invokes real MCP `urban.object.search`, checks both results, lexical postal code `00123`, the new property and omission of restricted facts.
+
+This is disposable integration qualification. The CSV rows are synthetic; they are not the VPS Teatri asset or its 13 rows. IAM, Gateway mediation, source-byte transport and HUMAN authentication are named fixture boundaries. Chat attachment/picker and browser sign-in have their own tests. Neither a CI PASS nor source publication grants production runtime authority or proves the target deployment.
