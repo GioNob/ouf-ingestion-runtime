@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name="ouf.ingestion.activation.enabled",havingValue="true")
 public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,RuntimePorts.SemanticPort,RuntimePorts.HistoricalBundlePort {
+ static final int MAX_SEMANTIC_REFERENCES=32;
  private final ObjectMapper json;private final URI gateway;private final Path tokenFile;private final String tenant;private final HttpClient http;
  public PublicationGatewayClient(ObjectMapper json,@Value("${ouf.ingestion.activation.gateway-url}") String gateway,@Value("${ouf.ingestion.activation.token-file}") String token,@Value("${ouf.ingestion.activation.tenant-id}") String tenant){
   this.json=json;this.gateway=URI.create(gateway);this.tokenFile=Path.of(token);this.tenant=tenant;
@@ -37,7 +38,7 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
  }
  @Override public void preflight(ExecutionBundle bundle){verifyReferences(bundle,false);}
  private void verifyReferences(ExecutionBundle bundle,boolean historical){
-  var published=PublishedActivation.map(bundle.configuration(),"publishedBundle");Object raw=published.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>20)throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");
+  var published=PublishedActivation.map(bundle.configuration(),"publishedBundle");Object raw=published.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");
   var expected=new HashSet<>((Collection<?>)bundle.configuration().get("pinnedReferences"));var seen=new HashSet<String>();
   for(Object item:bindings){if(!(item instanceof Map<?,?>))throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");@SuppressWarnings("unchecked")var b=(Map<String,Object>)item;
    String id=PublishedActivation.text(b,"semanticId"),version=PublishedActivation.text(b,"semanticVersion"),revision=UUID.fromString(PublishedActivation.text(b,"revisionId")).toString(),publication=UUID.fromString(PublishedActivation.text(b,"publicationSetId")).toString();String ref=id+"@"+version;if(!expected.contains(ref)||!seen.add(ref))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
