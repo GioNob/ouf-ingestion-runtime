@@ -47,11 +47,18 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   }
   if(!seen.equals(expected))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
  }
- @SuppressWarnings("unchecked") private Map<String,Object> get(String path){
+ public Map<String,Object> frozenConfiguration(String source,UUID version){return get("/api/onboarding/v1/sources/"+escape(source)+"/onboarding-versions/"+version);}
+ public Map<String,Object> compatibility(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/compatibility/ingestion-runtime?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
+ public Map<String,Object> attestCompatibility(String source,UUID version,String hash,long rows){return exchange("/api/internal/v1/onboarding/compatibility/ingestion-runtime",Map.of("sourceId",source,"onboardingVersionId",version.toString(),"configurationHash",hash,"compatible",true,"detail","Bounded frozen managed configuration probe PASS; validatedRows="+rows),201);}
+ private Map<String,Object> get(String path){return exchange(path,null,200);}
+ @SuppressWarnings("unchecked") private Map<String,Object> exchange(String path,Object body,int expected){
   try{String token=Files.readString(tokenFile).strip();if(token.isEmpty()||token.length()>16384||token.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
-   var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString()).GET().build();var pending=http.sendAsync(request,info->new BoundedBody());HttpResponse<byte[]> response;
-   try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_RESPONSE_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
-   if(response.statusCode()!=200)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
+   if(Thread.currentThread().isInterrupted())throw new InterruptedException();
+   var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString());
+   if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));
+   var pending=http.sendAsync(builder.build(),info->new BoundedBody());HttpResponse<byte[]> response;
+   try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_RESPONSE_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(InterruptedException cancelled){pending.cancel(true);throw cancelled;}
+   if(response.statusCode()!=expected)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
    return json.readValue(response.body(),Map.class);
   }catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(IOException e){throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_IO_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
  }

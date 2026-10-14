@@ -58,17 +58,21 @@ public final class FrozenConfigurationProbe {
     Object rawExpected=bundle.configuration().get("expectedFieldNames");
     if(!(rawExpected instanceof List<?> expected)||expected.stream().anyMatch(x->!(x instanceof String s)||s.isBlank())||new HashSet<>(expected).size()!=expected.size())throw invalid("ING_EXPECTED_FIELDS_INVALID");
     // Exact historical identities are resolved through the same Gateway port used by run preflight.
+    requireRunning();
     semantics.preflight(snapshot);
+    requireRunning();
     var pipeline=new CanonicalRecordPipeline(json,new FrozenContractValidator(json),null,null,null);
     UUID run=UUID.randomUUID();long count=0;
     try(var cursor=adapter.open(bundle,new AdapterSpi.Checkpoint(Map.of()))){
       Optional<AdapterSpi.SourceRecord> next;
       while((next=cursor.next()).isPresent()){
+        requireRunning();
         var record=next.get();
         if(!record.payload().keySet().containsAll(expected))throw invalid("ING_SCHEMA_INCOMPATIBLE");
         pipeline.validateForCompatibility(new CanonicalRecordPipeline.Command(run,"compatibility-probe",++count,1,adapter.adapterId(),bundle,record,"compatibility-probe",Map.of(),Map.of()));
       }
     }
+    requireRunning();
     if(count==0)throw invalid("ING_COMPAT_EMPTY_ASSET_UNPROVEN");
     return Map.of("schema","ouf.ingestion.compatibility-probe.v1","status","PASS","onboardingVersionId",version.toString(),"configurationHash",hash,"contentHash",PublishedActivation.text(bundle.configuration(),"expectedHash"),"adapterId",adapter.adapterId(),"adapterRuntimeVersion",adapter.compatibility().current(),"validatedRows",count,"semanticBindingCount",list.size(),"attestationSubmitted",false);
   }
@@ -77,5 +81,6 @@ public final class FrozenConfigurationProbe {
     try{return ExecutionGatewayClient.hash(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(configuration));}
     catch(Exception e){throw invalid("ING_COMPAT_CONFIGURATION_INVALID");}
   }
+  private static void requireRunning(){if(Thread.currentThread().isInterrupted())throw new RuntimePorts.GatewayFailure("ING_COMPAT_CANCELLED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
   private static IllegalArgumentException invalid(String code){return new IllegalArgumentException(code);}
 }

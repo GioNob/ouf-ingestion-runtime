@@ -108,7 +108,7 @@ class FrozenConfigurationProbeTest {
   private FrozenConfigurationProbe probe(){return new FrozenConfigurationProbe(json,objects(),semantics());}
   private RuntimePorts.ManagedObjectPort objects(){return (ref,size,hash)->{reads++;assertThat(size).isEqualTo(csv.length);assertThat(hash).isEqualTo(ExecutionGatewayClient.hash(csv));return csv;};}
   private RuntimePorts.SemanticPort semantics(){return new RuntimePorts.SemanticPort(){public void preflight(Collection<String> refs){semanticChecks++;assertThat(refs).containsExactly("places@1");}};}
-  private Map<String,Object> candidate(){
+  Map<String,Object> candidate(){
     var exec=new LinkedHashMap<String,Object>();
     exec.putAll(Map.of("acquisitionMode","INTERNAL_MANAGED_CSV","adapterId","managed-tabular-v1","adapterRuntimeVersion","1.0.0","sourceSchemaRef","schema:1","sourceSchemaId","places","sourceSchemaVersion","1","semanticPublicationSetRef","semantic:1","adapterProfileRef","adapter:1","observationPolicy","ACQUISITION_TIME"));
     exec.putAll(Map.of("expectedSize",csv.length,"maxRows",100,"maxColumns",20,"maxCellChars",1000));
