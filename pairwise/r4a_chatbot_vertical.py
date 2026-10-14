@@ -69,6 +69,7 @@ class Gateway(BaseHTTPRequestHandler):
   if auth not in ('Bearer '+token,'Bearer '+human):self.send_error(403);return
   if size>67_000_000:self.send_error(413);return
   raw=self.rfile.read(size) if self.command=='POST' else None;headers={'Authorization':auth,'Content-Type':'application/json'}
+  if self.headers.get('Idempotency-Key'):headers['Idempotency-Key']=self.headers['Idempotency-Key']
   try:
    if path.path=='/fixture/policy':self.reply(200,compact(policy));return
    if path.path=='/internal/object-storage/v1/content':
@@ -86,6 +87,7 @@ class Gateway(BaseHTTPRequestHandler):
    elif path.path.startswith('/internal/capabilities/v1/execute/'):
     if auth!='Bearer '+token or self.headers.get('X-OUF-Delegation')!='fixture-human-delegation':self.send_error(403);return
     envelope=json.loads(raw);cap=envelope['CapabilityID'];calls[cap]=calls.get(cap,0)+1
+    headers['Idempotency-Key']=envelope['IdempotencyKey']
     check_scope=envelope['Identity'];
     if check_scope.get('PrincipalID')!='fixture-human' or check_scope.get('TenantID')!='tenant-a' or check_scope.get('ActorType')!='HUMAN':self.send_error(403);return
     if cap in ('ouf.semantic.propose','ouf.semantic.review.prepare','ouf.semantic.approval.request','ouf.semantic.proposal.read'):
