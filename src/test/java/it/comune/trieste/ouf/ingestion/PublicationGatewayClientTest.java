@@ -8,6 +8,22 @@ import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.Test;
 
 class PublicationGatewayClientTest {
+ @Test void frozenConfigurationUsesOnlyTheServiceReadRouteWithExactHash()throws Exception{
+  Path token=Files.createTempFile("frozen-config-",".token");Files.writeString(token,"test-workload-token");
+  var path=new AtomicReference<String>();var method=new AtomicReference<String>();var bearer=new AtomicReference<String>();
+  var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  server.createContext("/",exchange->{try{path.set(exchange.getRequestURI().toString());method.set(exchange.getRequestMethod());
+   bearer.set(exchange.getRequestHeaders().getFirst("Authorization"));byte[] body="{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+   exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);}finally{exchange.close();}});server.start();
+  try{
+   var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
+   UUID version=UUID.randomUUID();String hash="sha256:"+"a".repeat(64);client.frozenConfiguration("source",version,hash);
+   assertThat(method.get()).isEqualTo("GET");assertThat(bearer.get()).isEqualTo("Bearer test-workload-token");
+   assertThat(path.get()).startsWith("/api/internal/v1/onboarding/ingestion-configuration?")
+       .contains("sourceId=source","onboardingVersionId="+version,"configurationHash=sha256%3A"+"a".repeat(64));
+   assertThat(path.get()).doesNotContain("/api/onboarding/v1/sources/");
+  }finally{server.stop(0);Files.deleteIfExists(token);}
+ }
  @Test void nativeClassAndTwentyPropertiesRemainExactlyPinnedWithinTheBound()throws Exception{
   for(int count:List.of(21,32,33)){
    var envelope=PublishedActivationTest.envelope("native-source",true,1);var published=PublishedActivation.map(envelope,"bundle");
