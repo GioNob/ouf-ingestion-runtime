@@ -1,0 +1,47 @@
+name: Gateway Ingestion authenticated READ owner boundary
+on:
+  push:
+    branches: [fix/ingestion-read-auth-20261019]
+  pull_request:
+    paths: ['src/main/java/it/comune/trieste/ouf/ingestion/GatewayReadReceiptVerifier.java', 'src/main/java/it/comune/trieste/ouf/ingestion/IngestionGatewayReadSecurityConfiguration.java', 'src/test/java/it/comune/trieste/ouf/ingestion/*GatewayRead*', '.github/workflows/gateway-read-owner-boundary.yml']
+permissions: {contents: read}
+jobs:
+  lua-java-http-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OUF_INGESTION_READ_LUA_VECTORS: ${{ github.workspace }}/target/ingestion-owner-lua-vectors.json
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-api-gateway
+          ref: 6bcb28906eee08e0ebe3507b8b58dd987012c8e6
+          path: .pairwise/gateway
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Produce real Lua owner receipts with a public fixture key
+        working-directory: .pairwise/gateway
+        run: |
+          set -euo pipefail
+          pip install -r requirements-dev.txt
+          python3 -m pytest -q tests/test_ingestion_read_materialization.py
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          python3 -m tests.export_ingestion_owner_vector "$OUF_INGESTION_READ_LUA_VECTORS"
+          test -s "$OUF_INGESTION_READ_LUA_VECTORS"
+      - name: Actual Spring Security and owner policy boundary
+        run: |
+          set -euo pipefail
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -Dtest=GatewayReadReceiptVerifierTest,IngestionGatewayReadHttpBoundaryTest,IngestionGatewayReadDisabledHttpBoundaryTest,IngestionIamHttpBoundaryTest test
+          sha256sum target/classes/it/comune/trieste/ouf/ingestion/IngestionIam{SecurityConfiguration,DisabledConfiguration}.class
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ingestion-owner-receipt-boundary
+          path: |
+            target/surefire-reports/
+            target/ingestion-owner-lua-vectors.json
+          retention-days: 30
