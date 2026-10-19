@@ -45,3 +45,42 @@ jobs:
             target/surefire-reports/
             target/ingestion-owner-lua-vectors.json
           retention-days: 30
+  candidate-image:
+    needs: lua-java-http-owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c48ee4b1873a474e81c6e1be70d393854021e2c1
+          path: .pairwise/ingestion-base
+          persist-credentials: false
+      - name: Build immutable non-root candidate without starting it
+        run: |
+          set -euo pipefail
+          mkdir -p target/owner-read-candidate
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "ouf-ingestion-read:$GITHUB_SHA" .
+          docker image inspect "ouf-ingestion-read:$GITHUB_SHA" > target/owner-read-image-inspect.json
+          ouf_candidate_id="$(docker create "ouf-ingestion-read:$GITHUB_SHA")"
+          trap 'docker rm "$ouf_candidate_id" >/dev/null 2>&1 || true' EXIT
+          docker cp "$ouf_candidate_id:/app/app.jar" target/owner-read-image.jar
+          docker image save "ouf-ingestion-read:$GITHUB_SHA" | gzip -n > target/owner-read-candidate/image.tar.gz
+      - name: Scan this exact image before exporting it
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: 'ouf-ingestion-read:${{ github.sha }}'
+          format: json
+          output: target/owner-read-candidate/trivy-image.json
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: false
+          exit-code: '1'
+      - name: Freeze exact bytes, class bindings and unchanged migrations
+        run: python3 scripts/ci/emit-ingestion-read-owner-candidate.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-read-owner-image-${{ github.sha }}
+          path: target/owner-read-candidate/
+          compression-level: 0
+          retention-days: 30
