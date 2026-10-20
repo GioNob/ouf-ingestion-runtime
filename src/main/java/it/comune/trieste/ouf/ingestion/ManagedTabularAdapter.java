@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.ingestion;
 import static it.comune.trieste.ouf.ingestion.AdapterSpi.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
 import java.util.*;
 import org.apache.commons.csv.*;
 import org.apache.poi.ss.usermodel.*;
@@ -40,16 +41,21 @@ public final class ManagedTabularAdapter implements AdapterSpi {
       throw error("ING_MANAGED_CSV_DIALECT_INVALID",ErrorClass.CONFIGURATION);
     int start=bytes.length>=3&&(bytes[0]&0xff)==0xef&&(bytes[1]&0xff)==0xbb
         &&(bytes[2]&0xff)==0xbf?3:0;
-    try(Reader reader=new InputStreamReader(new ByteArrayInputStream(bytes,start,bytes.length-start),StandardCharsets.UTF_8)){
+    try(Reader reader=new InputStreamReader(new ByteArrayInputStream(bytes,start,bytes.length-start),StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT))){
       CSVFormat format=CSVFormat.RFC4180.builder().setDelimiter(delimiter.charAt(0))
           .setHeader().setSkipHeaderRecord(true).setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).get();
       List<SourceRecord> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
-      for(CSVRecord record:format.parse(reader)){
+      try(CSVParser parser=format.parse(reader)){
+      List<String> headers=parser.getHeaderNames();
+      if(headers.isEmpty()||headers.size()>limits.columns||headers.stream().anyMatch(h->h.isBlank()||h.length()>limits.cellChars))
+        throw error("ING_MANAGED_HEADER_INVALID",ErrorClass.DATA);
+      for(CSVRecord record:parser){
+        if(!record.isConsistent())throw error("ING_MANAGED_CSV_ROW_WIDTH_INVALID",ErrorClass.DATA);
         if(record.size()>limits.columns)throw error("ING_MANAGED_TOO_MANY_COLUMNS",ErrorClass.DATA);
         Map<String,Object> row=new LinkedHashMap<>(); record.toMap().forEach((k,v)->row.put(k,checked(v,limits)));
         append(b,out,ids,row,"csv",record.getRecordNumber(),keys,limits);
-      } return List.copyOf(out);
-    }catch(AdapterException e){throw e;}catch(IOException|IllegalArgumentException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
+      } return List.copyOf(out);}
+    }catch(AdapterException e){throw e;}catch(IOException|UncheckedIOException|IllegalArgumentException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
   }
 
   private List<SourceRecord> xlsx(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits,String sheetName){
