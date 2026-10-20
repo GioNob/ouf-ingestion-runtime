@@ -62,6 +62,46 @@ class ManagedTabularAdapterTest {
       .isInstanceOf(AdapterSpi.AdapterException.class).hasMessage("ING_MANAGED_FORMULA_FORBIDDEN");
   }
 
+
+  @Test void malformedUtf8NeverBecomesAReplacementCharacter(){
+    byte[] bytes=new byte[]{'i','d',',','n','a','m','e','\n','A',',',(byte)0xc3,(byte)0x28,'\n'};
+    assertThatThrownBy(()->adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of()),new AdapterSpi.Checkpoint(Map.of())))
+      .isInstanceOf(AdapterSpi.AdapterException.class);
+  }
+
+  @Test void extraAndMissingCellsAreRejectedBeforeAnyCursorIsReturned(){
+    for(String csv:List.of("id,name\nA,Alpha,unmapped\n","id,name\nA\n")){
+      byte[] bytes=csv.getBytes(StandardCharsets.UTF_8);
+      assertThatThrownBy(()->adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of()),new AdapterSpi.Checkpoint(Map.of())))
+        .isInstanceOf(AdapterSpi.AdapterException.class).hasMessage("ING_MANAGED_CSV_ROW_WIDTH_INVALID");
+    }
+  }
+
+  @Test void duplicateMissingAndBlankHeadersAreRejected(){
+    for(String csv:List.of("id,id\nA,B\n","id,\nA,B\n","id,   \nA,B\n")){
+      byte[] bytes=csv.getBytes(StandardCharsets.UTF_8);
+      assertThatThrownBy(()->adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of()),new AdapterSpi.Checkpoint(Map.of())))
+        .isInstanceOf(AdapterSpi.AdapterException.class);
+    }
+  }
+
+  @Test void columnBoundIsEnforcedEvenForHeaderOnlyCsv(){
+    byte[] bytes="id,name\n".getBytes(StandardCharsets.UTF_8);
+    var b=bundle("INTERNAL_MANAGED_CSV",bytes,Map.of());
+    var config=new HashMap<>(b.configuration());config.put("maxColumns",1);
+    var limited=new ExecutionBundle(b.bundleId(),b.bundleVersion(),b.checksum(),b.sourceId(),b.acquisitionMode(),b.bindingRef(),config);
+    assertThatThrownBy(()->adapter(bytes).open(limited,new AdapterSpi.Checkpoint(Map.of())))
+      .isInstanceOf(AdapterSpi.AdapterException.class).hasMessage("ING_MANAGED_HEADER_INVALID");
+  }
+
+  @Test void quotedNewlineAndEmptyCellKeepTheirLexicalValues(){
+    byte[] bytes="id,name,note\r\nA,\"two\nlines\",\r\n".getBytes(StandardCharsets.UTF_8);
+    try(var cursor=adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("identityFields",List.of("id"))),new AdapterSpi.Checkpoint(Map.of()))){
+      assertThat(cursor.next().orElseThrow().payload()).containsEntry("name","two\nlines").containsEntry("note","");
+      assertThat(cursor.next()).isEmpty();
+    }
+  }
+
   private List<String> ids(byte[] bytes){
     var c=adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("identityFields",List.of("id"))),new AdapterSpi.Checkpoint(Map.of("ordinal",0)));
     List<String> ids=new ArrayList<>();for(var r=c.next();r.isPresent();r=c.next())ids.add(r.get().sourceObjectId());return ids;
