@@ -5,16 +5,35 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.context.*;
 
-@SpringBootTest class RunControlRuntimeTest {
+@SpringBootTest
+@Transactional
+class RunControlRuntimeTest {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
   @Autowired RunStateRepository state;@Autowired JdbcClient sql;@Autowired ObjectMapper json;@Autowired PlatformTransactionManager transactions;
+  // claimDue is deliberately global across tenants. Earlier test classes may
+  // retain runnable schedules; hide those only inside this rollback transaction,
+  // so the assertions exercise this test's fixtures without deleting history.
+  @BeforeEach void isolateGlobalSchedulerFixtures(){
+    sql.sql("update ouf_ingestion.ing_schedule set state='PAUSED' where state='ACTIVE'").update();
+  }
+  @Test void globalClaimSkipsBackedOffSourceAndServesAnotherTenant(){
+    String waiting=schedule("tenant-waiting"),ready=schedule("tenant-ready");
+    state.recordFailure(waiting,"ING_GATEWAY_429",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,Duration.ofMinutes(5));
+    var claim=state.claimDue("cross-tenant-worker",Duration.ofMinutes(1)).orElseThrow();
+    assertThat(claim.sourceId()).isEqualTo(ready);
+    assertThat(claim.tenantId()).isEqualTo("tenant-ready");
+    assertThat(state.claimDue("other-worker",Duration.ofMinutes(1))).isEmpty();
+    state.releaseSchedule(claim,true);
+  }
   @Test void everyDispatchedRunPinsBundleAndPassesPreflightBeforeRunning(){String source=schedule("tenant-a");AtomicInteger checks=new AtomicInteger();RuntimePorts.ActiveBundlePort bundles=id->bundle(id);RuntimePorts.SemanticPort semantic=refs->{assertThat(refs).containsExactly("schema://1","semantic://set/7");checks.incrementAndGet();};RunCoordinator coordinator=new RunCoordinator(state,bundles,semantic);UUID run=coordinator.dispatchOne("worker-a").orElseThrow();assertThat(checks).hasValue(1);assertThat(state.run(run)).containsEntry("state","RUNNING").containsEntry("phase","FULL_SNAPSHOT").containsEntry("bundle_checksum","sha256:pinned").containsEntry("tenant_id","tenant-a");assertThat(state.claimDue("worker-b",Duration.ofMinutes(1))).isEmpty();}
   @Test void phasesOnlyAdvanceInNormativeOrder(){String source=schedule("tenant-phase");var claim=state.claimDue("phase-worker",Duration.ofMinutes(1)).orElseThrow();UUID run=state.createPreflightRun(claim,bundle(source),"corr");state.preflightSucceeded(run);assertThatThrownBy(()->state.advancePhase(run,"DELTA")).hasMessage("ING_PHASE_TRANSITION_INVALID");state.advancePhase(run,"CATCH_UP");state.advancePhase(run,"DELTA");assertThat(state.run(run)).containsEntry("phase","DELTA");state.releaseSchedule(claim,true);}
   @Test void onlyTransientFailuresConsumeFiniteWindowAndSuccessRecovers(){String source="health-"+UUID.randomUUID();for(int i=0;i<5;i++)state.recordFailure(source,"ING_GATEWAY_503",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);Map<String,Object> paused=sql.sql("select status,consecutive_failures,retry_attempts_in_window,last_error_code,circuit_open_until,retry_not_before,first_failure_at,last_failure_at from ouf_ingestion.source_health where source_id=:s").param("s",source).query().singleRow();assertThat(paused).containsEntry("status","PAUSED").containsEntry("consecutive_failures",5).containsEntry("retry_attempts_in_window",5).containsEntry("last_error_code","ING_GATEWAY_503");assertThat(paused.get("circuit_open_until")).isNotNull();assertThat(paused.get("retry_not_before")).isNotNull();assertThat(paused.get("first_failure_at")).isNotNull();assertThat(paused.get("last_failure_at")).isNotNull();state.recordSuccess(source);assertThat(sql.sql("select status||':'||retry_attempts_in_window from ouf_ingestion.source_health where source_id=:s").param("s",source).query(String.class).single()).isEqualTo("HEALTHY:0");}
