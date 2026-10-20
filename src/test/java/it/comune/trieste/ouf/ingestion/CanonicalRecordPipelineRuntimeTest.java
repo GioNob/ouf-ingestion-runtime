@@ -74,6 +74,37 @@ import org.springframework.test.context.*;
     assertThat(sql.sql("select checkpoint_json from ouf_ingestion.ing_partition where run_id=:r and partition_key='default'").param("r",run).query(String.class).single()).isEqualTo("{}");
   }
 
+
+  @Test void configuredDecimalAndDateShareCompatibilityAndProductionMapping() throws Exception {
+    UUID run=run();RecordingLake lake=new RecordingLake();var pipeline=pipeline(lake);
+    var mappings=List.of(Map.<String,Object>of("sourceField","amount","targetPropertyIri","https://example.test/amount","transform","DECIMAL_COMMA_V1"),
+      Map.<String,Object>of("sourceField","day","targetPropertyIri","https://example.test/day","transform","DATE_DMY_V1"));
+    var command=command(run,Map.of("amount","12,3400","day","29/02/2024"),mappings);
+    pipeline.validateForCompatibility(command);assertThat(lake.zones).isEmpty();
+    var result=pipeline.process(command);assertThat(result.succeeded()).isTrue();
+    var canonical=(Map<String,Object>)payload(result.handoffId()).get("canonicalPayload");
+    assertThat(((Number)canonical.get("https://example.test/amount")).doubleValue()).isEqualTo(12.34);
+    assertThat(canonical).containsEntry("https://example.test/day","2024-02-29");
+    assertThat(new String(lake.content.get(RuntimePorts.DataLakePort.Zone.RAW),java.nio.charset.StandardCharsets.UTF_8))
+      .contains("12,3400","29/02/2024");
+    String lineage=sql.sql("select evidence_json::text from ouf_ingestion.ing_lineage where lineage_id=:l")
+      .param("l",result.lineageId()).query(String.class).single();
+    assertThat(lineage).contains("DECIMAL_COMMA_V1","DATE_DMY_V1","mapping:places:1","rawObjectRef");
+  }
+
+  @Test void badConfiguredValueFailsCompatibilityAndRuntimeWithoutOutboxOrCheckpoint(){
+    UUID run=run();RecordingLake lake=new RecordingLake();var pipeline=pipeline(lake);
+    var command=command(run,Map.of("day","29/02/2023"),
+      List.of(Map.of("sourceField","day","targetPropertyIri","https://example.test/day","transform","DATE_DMY_V1")));
+    assertThatThrownBy(()->pipeline.validateForCompatibility(command)).hasMessage("ING_DATATYPE_COERCION_FAILED");
+    assertThat(lake.zones).isEmpty();
+    var result=pipeline.process(command);assertThat(result.succeeded()).isFalse();assertThat(result.quarantineId()).isNotNull();
+    assertThat(sql.sql("select reason_code from ouf_ingestion.processing_attempt where attempt_id=:a").param("a",result.processingAttemptId()).query(String.class).single())
+      .isEqualTo("ING_DATATYPE_COERCION_FAILED");
+    assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(Long.class).single()).isZero();
+    assertThat(sql.sql("select checkpoint_json from ouf_ingestion.ing_partition where run_id=:r and partition_key='default'").param("r",run).query(String.class).single()).isEqualTo("{}");
+  }
+
   private CanonicalRecordPipeline pipeline(RuntimePorts.DataLakePort lake){return new CanonicalRecordPipeline(json,validator,durable,quarantine,lake,Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"),ZoneOffset.UTC));}
   private CanonicalRecordPipeline.Command command(UUID run,Map<String,Object> payload,List<Map<String,Object>> mappings){return command(run,payload,mappings,Map.of(),Map.of());}
   private CanonicalRecordPipeline.Command command(UUID run,Map<String,Object> payload,List<Map<String,Object>> mappings,Map<String,Object> config,Map<String,Object> provenance){Map<String,Object> cfg=new LinkedHashMap<>(Map.of("sourceSchemaRef","schema:places:1","sourceSchemaId","places","sourceSchemaVersion","1","typeCode","place","semanticPublicationSetRef","sem:1","adapterProfileRef","adapter:managed:1","observationPolicy","ACQUISITION_TIME","propertyMappings",mappings,"mappingRefs",List.of("mapping:places:1"),"relationshipResolutionStrategyRefs",List.of("relationship-strategy:place-address:1")));cfg.putAll(config);Map<String,Object> p=new LinkedHashMap<>(provenance);p.put("managedObjectRef","managed:object");ExecutionBundle b=new ExecutionBundle("bundle","1","sha256:bundle","source-1","INTERNAL_MANAGED_CSV","managed:object",cfg);AdapterSpi.SourceRecord record=new AdapterSpi.SourceRecord("object-1",1,payload,p);return new CanonicalRecordPipeline.Command(run,"default",1,1,"managed-tabular-v1",b,record,"corr-1",Map.of("ordinal",1),Map.of("ordinal",1));}
@@ -82,5 +113,5 @@ import org.springframework.test.context.*;
   private static Map<String,Object> mapping(String source,String target){return Map.of("sourceField",source,"targetPropertyIri",target,"transform","IDENTITY");}
   private static String string(Map<String,Object> row,String key){return String.valueOf(row.get(key));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
-  private static final class RecordingLake implements RuntimePorts.DataLakePort {final List<Zone> zones=new ArrayList<>();public Receipt persist(Zone zone,UUID run,String object,byte[] content,String hash,String key){zones.add(zone);return new Receipt("lake:"+zone.name().toLowerCase()+":"+key,true);}}
+  private static final class RecordingLake implements RuntimePorts.DataLakePort {final List<Zone> zones=new ArrayList<>();final Map<Zone,byte[]> content=new HashMap<>();public Receipt persist(Zone zone,UUID run,String object,byte[] content,String hash,String key){zones.add(zone);this.content.put(zone,content.clone());return new Receipt("lake:"+zone.name().toLowerCase()+":"+key,true);}}
 }
