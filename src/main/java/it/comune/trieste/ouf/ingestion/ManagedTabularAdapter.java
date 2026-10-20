@@ -55,7 +55,7 @@ public final class ManagedTabularAdapter implements AdapterSpi {
         Map<String,Object> row=new LinkedHashMap<>(); record.toMap().forEach((k,v)->row.put(k,checked(v,limits)));
         append(b,out,ids,row,"csv",record.getRecordNumber(),keys,limits);
       } return List.copyOf(out);}
-    }catch(AdapterException e){throw e;}catch(IOException|IllegalArgumentException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
+    }catch(AdapterException e){throw e;}catch(IOException|UncheckedIOException|IllegalArgumentException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
   }
 
   private List<SourceRecord> xlsx(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits,String sheetName){
