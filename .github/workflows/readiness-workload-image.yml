@@ -1,0 +1,63 @@
+name: Readiness workload immutable candidate
+on:
+  push:
+    branches: [build/readiness-workload-candidate-20261021]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      BUILD_RECIPE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 4165b9e149be467d5d7c6bed35e4e1af4e249db1
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .recipe
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 0fe0de60c6d980fe97610acf195d4bfd46d3777f
+          path: .baseline
+          persist-credentials: false
+      - name: Verify candidate custody and drift guards
+        run: python3 -m unittest discover -s .recipe/tests -p 'test_readiness_workload_candidate.py' -v
+      - name: Build the exact qualified source without starting the image
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 4165b9e149be467d5d7c6bed35e4e1af4e249db1
+          mkdir -p target/readiness-candidate
+          ouf_tag=ouf-ingestion-readiness:4165b9e149be467d5d7c6bed35e4e1af4e249db1
+          docker build --platform linux/amd64 --label org.opencontainers.image.revision=4165b9e149be467d5d7c6bed35e4e1af4e249db1 -t "$ouf_tag" .
+          docker image inspect "$ouf_tag" > target/readiness-image-inspect.json
+          ouf_cid="$(docker create "$ouf_tag")"
+          trap 'docker rm "$ouf_cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$ouf_cid:/app/app.jar" target/readiness-image.jar
+          docker image save "$ouf_tag" | gzip -n > target/readiness-candidate/image.tar.gz
+      - name: Scan the exported image before publication as a CI artifact
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ouf-ingestion-readiness:4165b9e149be467d5d7c6bed35e4e1af4e249db1
+          format: json
+          output: target/readiness-candidate/trivy-image.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+      - name: Bind exact source, migrations, classes and image archive
+        run: |
+          set -euo pipefail
+          python3 .recipe/scripts/ci/emit-readiness-workload-candidate.py
+          cp target/readiness-image-inspect.json target/readiness-candidate/image-inspect.json
+          cd target/readiness-candidate
+          sha256sum image.tar.gz image-inspect.json metadata.json trivy-image.json > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ingestion-readiness-workload-image-4165b9e149be467d5d7c6bed35e4e1af4e249db1
+          path: target/readiness-candidate/
+          compression-level: 0
+          retention-days: 30
