@@ -19,13 +19,13 @@ class OnboardingReadinessTest {
   final UUID version=UUID.fromString((String)candidate.get("onboardingVersionId"));final String hash=(String)candidate.get("configurationHash");
   @AfterEach void close(){service.close();Thread.interrupted();}
   Map<String,Object> attestation(){return Map.of("attestation_id",UUID.randomUUID().toString(),"onboarding_version_id",version.toString(),"configuration_hash",hash,"compatible",true,"consumer","INGESTION_RUNTIME");}
-  void frozen(){when(gateway.frozenConfiguration("source",version)).thenReturn(Map.of("source_id","source","onboarding_version_id",version.toString(),"configuration_hash",hash,"configuration",candidate.get("configuration"),"state","APPROVED","version",1));}
+  void frozen(){when(gateway.frozenConfiguration(eq("source"),eq(version),anyString())).thenReturn(Map.of("source_id","source","onboarding_version_id",version.toString(),"configuration_hash",hash,"configuration",candidate.get("configuration"),"state","APPROVED","version",1));}
   @Test void realProbeValidatesEveryRowBeforeExactOwnerAcknowledgment(){
     frozen();when(gateway.compatibility("source",version,hash)).thenReturn(Map.of("status","ABSENT"));
     when(objects.read(anyString(),anyLong(),anyString())).thenReturn("\ufeffid;name\r\n1;Town Hall\r\n2;Library\r\n".getBytes(StandardCharsets.UTF_8));
     when(gateway.attestCompatibility("source",version,hash,2)).thenReturn(attestation());
     assertThat(service.verify("source",version,hash,()->{})).containsEntry("status","PASS").containsEntry("validatedRows",2L).containsEntry("attestationSubmitted",true).containsEntry("reconciled",false);
-    var order=inOrder(gateway,objects);order.verify(gateway).frozenConfiguration("source",version);order.verify(gateway).compatibility("source",version,hash);order.verify(gateway).preflight(any(ExecutionBundle.class));order.verify(objects).read(anyString(),anyLong(),anyString());order.verify(gateway).attestCompatibility("source",version,hash,2);
+    var order=inOrder(gateway,objects);order.verify(gateway).frozenConfiguration("source",version,hash);order.verify(gateway).compatibility("source",version,hash);order.verify(gateway).preflight(any(ExecutionBundle.class));order.verify(objects).read(anyString(),anyLong(),anyString());order.verify(gateway).attestCompatibility("source",version,hash,2);
   }
   @Test void lostAcknowledgmentReconcilesWithoutReissuingMutationOrReadingAsset(){
     frozen();when(gateway.compatibility("source",version,hash)).thenReturn(Map.of("status","PRESENT","compatible",true,"attestation",attestation()));

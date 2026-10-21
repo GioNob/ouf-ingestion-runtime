@@ -31,7 +31,7 @@ public class OnboardingReadinessService {
   }
   Map<String,Object> attempt(String source,UUID version,String hash,Runnable authorize){
     authorize.run();
-    var current=gateway.frozenConfiguration(source,version);
+    var current=gateway.frozenConfiguration(source,version,hash);
     if(!source.equals(current.get("source_id"))||!"APPROVED".equals(current.get("state"))||!version.toString().equals(String.valueOf(current.get("onboarding_version_id")))
         ||!hash.equals(current.get("configuration_hash")))throw new IllegalArgumentException("ING_READINESS_FROZEN_IDENTITY_CHANGED");
     Map<String,Object> configuration=PublishedActivation.map(current,"configuration");

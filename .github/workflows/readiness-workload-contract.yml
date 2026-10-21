@@ -1,0 +1,25 @@
+name: Readiness workload configuration contract
+on:
+  push:
+    branches: [fix/readiness-workload-configuration-read-20261021]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  exact-workload-read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Install pinned Authorization SDK
+        run: bash scripts/install-authorization-sdk.sh
+      - name: Verify real HTTP readiness and existing compatibility boundaries
+        run: mvn -B -ntp -Dtest=OnboardingReadinessGatewayContractTest,OnboardingReadinessTest,PublicationGatewayClientTest,FrozenConfigurationProbeTest test
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readiness-workload-contract-${{ github.run_id }}
+          path: target/surefire-reports/
+          retention-days: 30
