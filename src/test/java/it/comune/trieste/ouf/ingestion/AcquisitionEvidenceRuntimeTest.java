@@ -36,6 +36,48 @@ class AcquisitionEvidenceRuntimeTest {
   @SuppressWarnings("unchecked") static Map<String,Object> map(Object value){return (Map<String,Object>)value;}
   @SuppressWarnings("unchecked") static List<Map<String,Object>> rows(Object value){return (List<Map<String,Object>>)value;}
 
+  @Test void separateReadApplicationUsesRealHttpAndCannotStartWorkersMigrateOrWrite()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN");
+    var temp=java.nio.file.Files.createTempDirectory("ingestion-evidence-http-");
+    var key=temp.resolve("key");java.nio.file.Files.writeString(key,"cd".repeat(32));
+    var policy=policy(temp,"human-a");
+    try(var context=it.comune.trieste.ouf.evidence.IngestionAcquisitionReadApplication.application().run(
+      "--server.port=0","--spring.jmx.enabled=false","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.ingestion.execution.enabled=true",
+      "--ouf.ingestion.gateway-read.enabled=true","--ouf.ingestion.gateway-read.key-file="+key,
+      "--ouf.ingestion.gateway-read.issuer="+GatewayReadReceiptVerifierTest.ISSUER,"--ouf.ingestion.gateway-read.audience=gateway","--ouf.ingestion.gateway-read.workload=workload",
+      "--ouf.authorization.bundle-file="+policy.get("file"),"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+policy.get("hash"))){
+      assertThat(context.getBeansOfType(RunExecutionWorker.class)).isEmpty();assertThat(context.getBeansOfType(ReplayWorker.class)).isEmpty();
+      assertThat(context.getBeansOfType(OutboxDispatcher.class)).isEmpty();assertThat(context.getBeansOfType(OnboardingReviewDispatcher.class)).isEmpty();
+      assertThat(context.getBeansOfType(org.flywaydb.core.Flyway.class)).isEmpty();
+      var ds=context.getBean(com.zaxxer.hikari.HikariDataSource.class);
+      assertThat(ds.getMaximumPoolSize()).isEqualTo(2);assertThat(ds.getMinimumIdle()).isZero();
+      try(var connection=ds.getConnection()){
+        assertThat(connection.isReadOnly()).isTrue();assertThat(connection.getAutoCommit()).isFalse();
+        assertThatThrownBy(()->connection.createStatement().execute("create table ouf_ingestion.evidence_forbidden_write(id int)")).hasMessageContaining("read-only");connection.rollback();
+      }
+      int port=context.getEnvironment().getRequiredProperty("local.server.port",Integer.class);
+      byte[] body=("{\"sourceId\":\""+f.source()+"\",\"runId\":\""+f.run()+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      var receipt=GatewayReadReceiptVerifierTest.receipt();long now=java.time.Instant.now().getEpochSecond();
+      receipt.put("path",GatewayReadReceiptVerifier.PREFIX+"acquisition");receipt.put("capability","ouf.ingestion.acquisition.read");receipt.put("iat",now);receipt.put("exp",now+30);
+      receipt.put("bodyHash",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body)));receipt.put("scope",String.join(" ",new TreeSet<>(AcquisitionEvidenceService.CAPABILITIES)));
+      var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+port+GatewayReadReceiptVerifier.PREFIX+"acquisition"))
+        .header("Content-Type","application/json").header(GatewayReadReceiptVerifier.HEADER,GatewayReadReceiptVerifierTest.sign(receipt))
+        .header("X-Correlation-ID","corr").header("X-Tool-Attempt-ID","11111111-1111-4111-8111-111111111111").header("Idempotency-Key","idem").POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body)).build();
+      var client=java.net.http.HttpClient.newHttpClient();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).isEqualTo(200);assertThat(json.readTree(response.body()).path("run").path("read_only_snapshot").asBoolean()).isTrue();
+      var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+port+"/api/trusted-human/v1/ingestion/runs/"+f.run()+"/resume")).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(denied.statusCode()).isIn(401,403);
+    }
+    assertThat(sql.sql("select state from ouf_ingestion.ing_run where run_id=:r").param("r",f.run()).query(String.class).single()).isEqualTo("SUCCEEDED");
+  }
+  Map<String,String> policy(java.nio.file.Path directory,String subject)throws Exception{
+    var engine=TestAuthorization.runtime(subject,"HUMAN",AcquisitionEvidenceService.CAPABILITIES);var b=engine.currentSnapshot().bundle();
+    var grants=b.grants().stream().map(g->new it.comune.trieste.ouf.authorization.AuthorizationPolicy.Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),new it.comune.trieste.ouf.authorization.AuthorizationPolicy.GrantConstraints("ALLOW",null,null,null,Map.of("module","INGESTION"),Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    var bundle=new it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle(b.bundleId(),2,b.publishedAt(),b.capabilities(),grants);
+    byte[] bytes=new ObjectMapper().registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).writeValueAsBytes(bundle);var file=directory.resolve("policy.json");java.nio.file.Files.write(file,bytes);
+    return Map.of("file",file.toString(),"hash",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
+  }
+
   @Test void realSnapshotReportsAckPrefixAndMinimizedPropertyStatesWithoutReadingRawValues()throws Exception{
     Fixture f=fixture("tenant-a","OPEN");
     var before=counts(f.run());var result=service.read(query(f,100,null),actor(AcquisitionEvidenceService.CAPABILITIES));
