@@ -22,6 +22,14 @@ class AcquisitionEvidenceRuntimeTest {
   record Fixture(UUID run,String source,UUID first,UUID second){}
   TrustedAuthorizationContext.Context actor(Set<String> caps){
     var request=new MockHttpServletRequest();TestAuthorization.bind(request,"reader","HUMAN",caps);
+    var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);
+    var old=engine.currentSnapshot().bundle();
+    var grants=old.grants().stream().map(g->new it.comune.trieste.ouf.authorization.AuthorizationPolicy.Grant(
+      g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),
+      new it.comune.trieste.ouf.authorization.AuthorizationPolicy.GrantConstraints("ALLOW",null,"operational",null,
+        Map.of("module","INGESTION"),Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    try{TestAuthorization.install(engine,new it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}
+    catch(Exception failure){throw new IllegalStateException(failure);}
     return new TrustedAuthorizationContext().owner(request,"ingestion.lineage.read");
   }
   AcquisitionEvidenceApi.Query query(Fixture f,int size,UUID after){return new AcquisitionEvidenceApi.Query(f.source(),f.run(),size,after);}
