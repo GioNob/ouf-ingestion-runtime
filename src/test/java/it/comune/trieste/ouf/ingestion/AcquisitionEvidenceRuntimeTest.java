@@ -42,7 +42,7 @@ class AcquisitionEvidenceRuntimeTest {
     var key=temp.resolve("key");java.nio.file.Files.writeString(key,"cd".repeat(32));
     var policy=policy(temp,"human-a");
     try(var context=it.comune.trieste.ouf.evidence.IngestionAcquisitionReadApplication.application().run(
-      "--server.port=0","--spring.jmx.enabled=false","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.ingestion.execution.enabled=true",
+      "--server.port=0","--spring.jmx.enabled=false","--spring.main.sources=it.comune.trieste.ouf.ingestion.IngestionRuntimeApplication","--spring.main.web-application-type=none","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.ingestion.execution.enabled=true",
       "--ouf.ingestion.gateway-read.enabled=true","--ouf.ingestion.gateway-read.key-file="+key,
       "--ouf.ingestion.gateway-read.issuer="+GatewayReadReceiptVerifierTest.ISSUER,"--ouf.ingestion.gateway-read.audience=gateway","--ouf.ingestion.gateway-read.workload=workload",
       "--ouf.authorization.bundle-file="+policy.get("file"),"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+policy.get("hash"))){

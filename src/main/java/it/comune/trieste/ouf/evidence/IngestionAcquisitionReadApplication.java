@@ -21,11 +21,19 @@ import org.springframework.security.web.SecurityFilterChain;
 public class IngestionAcquisitionReadApplication {
   public static SpringApplication application(){
     var app=new SpringApplication(IngestionAcquisitionReadApplication.class);app.setWebApplicationType(WebApplicationType.SERVLET);
-    app.addInitializers(context->context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("enforced-owner-read-only",Map.of(
-      "spring.flyway.enabled","false","spring.sql.init.mode","never",
-      "ouf.ingestion.execution.enabled","false","management.endpoints.web.exposure.include","health","management.endpoint.health.show-details","never",
-      "management.endpoint.health.probes.enabled","true",
-      "management.endpoint.health.group.readiness.include","readinessState,db,acquisitionAuthorization"))));
+    app.addListeners((org.springframework.context.ApplicationListener<org.springframework.context.ApplicationEvent>)event->{
+      if(event instanceof org.springframework.boot.context.event.ApplicationEnvironmentPreparedEvent prepared){
+        Map<String,Object> enforced=new java.util.HashMap<>();
+        enforced.put("spring.flyway.enabled","false");enforced.put("spring.sql.init.mode","never");
+        enforced.put("ouf.ingestion.execution.enabled","false");
+        enforced.put("spring.main.sources","");enforced.put("spring.main.web-application-type","servlet");
+        enforced.put("spring.main.allow-bean-definition-overriding","false");
+        enforced.put("management.endpoints.web.exposure.include","health");enforced.put("management.endpoint.health.show-details","never");
+        enforced.put("management.endpoint.health.probes.enabled","true");
+        enforced.put("management.endpoint.health.group.readiness.include","readinessState,db,acquisitionAuthorization");
+        prepared.getEnvironment().getPropertySources().addFirst(new MapPropertySource("enforced-owner-read-only",enforced));
+      }
+    });
     return app;
   }
   public static void main(String[] args){application().run(args);}

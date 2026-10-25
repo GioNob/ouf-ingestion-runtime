@@ -38,6 +38,10 @@ public class AcquisitionEvidenceService {
     var rows=sql.sql("""
       select l.lineage_id,h.handoff_id,h.state handoff_state,h.downstream_receipt_ref,h.acked_at,
         h.sequence_no,h.partition_key,h.candidate_watermark_json is not null candidate_watermark_recorded,
+        h.payload_json->>'ingestionRunId'=r.run_id::text payload_run_matches,
+        h.payload_json->>'handoffId'=h.handoff_id::text payload_handoff_matches,
+        h.payload_json->>'lineageId'=l.lineage_id::text payload_lineage_matches,
+        h.payload_json#>>'{sourceIdentity,sourceId}'=r.source_id payload_source_matches,
         l.evidence_json#>>'{data,rawHash}' raw_hash,l.evidence_json#>>'{data,outputHash}' output_hash,
         h.payload_json->'dataAccessLabels' _labels,
         (select coalesce(jsonb_agg(jsonb_build_object('propertyIri',p.key,'valueState',
