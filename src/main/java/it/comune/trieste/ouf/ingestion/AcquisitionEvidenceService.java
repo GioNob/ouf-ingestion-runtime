@@ -64,6 +64,7 @@ public class AcquisitionEvidenceService {
       // A receipt is an opaque identifier, never an arbitrary URL or owner-private path.
       Object receipt=item.remove("downstream_receipt_ref");
       item.put("downstreamReceiptRecorded",receipt instanceof String s&&!s.isBlank());
+      if(receipt instanceof String s&&!s.isBlank()&&s.length()<=4096)item.put("downstreamReceiptHash",hash(s));
       item.put("durableAckRecorded","ACKED".equals(row.get("handoff_state"))&&row.get("acked_at")!=null&&Boolean.TRUE.equals(item.get("downstreamReceiptRecorded")));
       visible.add(item);
     }
@@ -98,7 +99,7 @@ public class AcquisitionEvidenceService {
     require(q,actor,"OPEN");
     var out=new LinkedHashMap<String,Object>();out.put("schema","ouf.ingestion.acquisition-evidence.v1");out.put("run",run);
     out.put("counts",counts);out.put("items",visible);out.put("partitions",partitions);out.put("partitionTruncated",partitionTruncated);
-    out.put("nextLineageId",more?rows.getLast().get("lineage_id"):null);out.put("partial",redacted||more||partitionTruncated);
+    out.put("nextLineageId",more&&!redacted?rows.getLast().get("lineage_id"):null);out.put("partial",redacted||more||partitionTruncated);
     out.put("authorization",redacted?"REDACTED":"AUTHORIZED");out.put("authorizationDecisionRef",actor.owner().decisionRef());
     out.put("downstreamMaterializationProven",false);return out;
   }
@@ -124,5 +125,6 @@ public class AcquisitionEvidenceService {
     try{return new com.fasterxml.jackson.databind.ObjectMapper().readValue(raw.toString(),Object.class);}
     catch(Exception invalid){throw new IllegalStateException("ING_ACQUISITION_STORED_METADATA_INVALID");}
   }
+  private static String hash(String value){try{return "sha256:"+HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}}
   private static void safeReference(Map<String,Object> row,String field,String pattern){Object value=row.get(field);if(value!=null&&(!(value instanceof String s)||!s.matches(pattern)))row.put(field,null);}
 }
