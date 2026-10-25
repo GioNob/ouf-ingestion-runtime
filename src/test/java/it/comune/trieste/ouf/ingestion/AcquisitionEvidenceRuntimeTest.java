@@ -36,6 +36,30 @@ class AcquisitionEvidenceRuntimeTest {
   @SuppressWarnings("unchecked") static Map<String,Object> map(Object value){return (Map<String,Object>)value;}
   @SuppressWarnings("unchecked") static List<Map<String,Object>> rows(Object value){return (List<Map<String,Object>>)value;}
 
+  @Test @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="EVIDENCE_READ_IMAGE",matches=".+")
+  void packagedImageUsesSignedHttpReadAndDeniesMutation()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN");var before=counts(f.run());
+    var directory=java.nio.file.Files.createTempDirectory("ingestion-packaged-read-");var key=directory.resolve("key");java.nio.file.Files.writeString(key,"cd".repeat(32));var policy=policy(directory,"human-a");
+    var args=List.of("--spring.main.sources=it.comune.trieste.ouf.ingestion.IngestionRuntimeApplication","--spring.main.web-application-type=none","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.ingestion.execution.enabled=true",
+      "--ouf.ingestion.gateway-read.enabled=true","--ouf.ingestion.gateway-read.key-file="+key,"--ouf.ingestion.gateway-read.issuer="+GatewayReadReceiptVerifierTest.ISSUER,"--ouf.ingestion.gateway-read.audience=gateway","--ouf.ingestion.gateway-read.workload=workload",
+      "--ouf.authorization.bundle-file="+policy.get("file"),"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+policy.get("hash"));
+    try(var container=new PackagedReadProcess(directory,args,"OUF_ING_DB_")){
+      container.ready();
+      byte[] body=("{\"sourceId\":\""+f.source()+"\",\"runId\":\""+f.run()+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      var receipt=GatewayReadReceiptVerifierTest.receipt();long now=java.time.Instant.now().getEpochSecond();receipt.put("iat",now);receipt.put("exp",now+30);
+      receipt.put("path",GatewayReadReceiptVerifier.PREFIX+"acquisition");receipt.put("capability","ouf.ingestion.acquisition.read");receipt.put("bodyHash",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body)));receipt.put("scope",String.join(" ",new TreeSet<>(AcquisitionEvidenceService.CAPABILITIES)));
+      var uri=java.net.URI.create("http://127.0.0.1:"+container.port+GatewayReadReceiptVerifier.PREFIX+"acquisition");
+      var request=java.net.http.HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofSeconds(5)).header("Content-Type","application/json")
+        .header(GatewayReadReceiptVerifier.HEADER,GatewayReadReceiptVerifierTest.sign(receipt)).header("X-Correlation-ID","corr").header("X-Tool-Attempt-ID","11111111-1111-4111-8111-111111111111").header("Idempotency-Key","idem")
+        .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body)).build();
+      var client=container.client();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+      assertThat(new ObjectMapper().readTree(response.body()).path("authorization").asText()).isEqualTo("AUTHORIZED");
+      var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+container.port+"/api/trusted-human/v1/ingestion/runs/"+f.run()+"/resume")).timeout(java.time.Duration.ofSeconds(5)).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(denied.statusCode()).isIn(401,403);
+    }
+    assertThat(counts(f.run())).isEqualTo(before);
+  }
   @Test void separateReadApplicationUsesRealHttpAndCannotStartWorkersMigrateOrWrite()throws Exception{
     Fixture f=fixture("tenant-a","OPEN");
     var temp=java.nio.file.Files.createTempDirectory("ingestion-evidence-http-");
