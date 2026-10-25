@@ -23,7 +23,9 @@ public class IngestionAcquisitionReadApplication {
     var app=new SpringApplication(IngestionAcquisitionReadApplication.class);app.setWebApplicationType(WebApplicationType.SERVLET);
     app.addInitializers(context->context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("enforced-owner-read-only",Map.of(
       "spring.flyway.enabled","false","spring.sql.init.mode","never",
-      "ouf.ingestion.execution.enabled","false","management.endpoints.web.exposure.include","health","management.endpoint.health.show-details","never"))));
+      "ouf.ingestion.execution.enabled","false","management.endpoints.web.exposure.include","health","management.endpoint.health.show-details","never",
+      "management.endpoint.health.probes.enabled","true",
+      "management.endpoint.health.group.readiness.include","readinessState,db,acquisitionAuthorization"))));
     return app;
   }
   public static void main(String[] args){application().run(args);}
@@ -37,6 +39,7 @@ public class IngestionAcquisitionReadApplication {
       return bean;
     }
   };}
+  @Bean org.springframework.boot.health.contributor.HealthIndicator acquisitionAuthorization(it.comune.trieste.ouf.authorization.LocalAuthorization runtime){return ()->runtime.health().ready()?org.springframework.boot.health.contributor.Health.up().build():org.springframework.boot.health.contributor.Health.down().build();}
   @Bean org.springframework.security.authentication.AuthenticationManager receiptOnlyAuthentication(){return authentication->{throw new org.springframework.security.authentication.BadCredentialsException("EVIDENCE_RECEIPT_REQUIRED");};}
   @Bean @Order(2) SecurityFilterChain evidenceOnlyChain(HttpSecurity http)throws Exception{
     http.csrf(c->c.disable());http.sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
