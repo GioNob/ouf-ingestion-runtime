@@ -55,6 +55,7 @@ class AcquisitionEvidenceRuntimeTest {
       var client=container.client();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
       assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
       assertThat(new ObjectMapper().readTree(response.body()).path("authorization").asText()).isEqualTo("AUTHORIZED");
+      assertThat(new ObjectMapper().readTree(response.body()).path("redactionReasons").isEmpty()).isTrue();
       var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+container.port+"/api/trusted-human/v1/ingestion/runs/"+f.run()+"/resume")).timeout(java.time.Duration.ofSeconds(5)).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
       assertThat(denied.statusCode()).isIn(401,403);
     }
@@ -105,7 +106,7 @@ class AcquisitionEvidenceRuntimeTest {
   @Test void realSnapshotReportsAckPrefixAndMinimizedPropertyStatesWithoutReadingRawValues()throws Exception{
     Fixture f=fixture("tenant-a","OPEN");
     var before=counts(f.run());var result=service.read(query(f,100,null),actor(AcquisitionEvidenceService.CAPABILITIES));
-    assertThat(result).containsEntry("authorization","AUTHORIZED").containsEntry("partial",false).containsEntry("downstreamMaterializationProven",false);
+    assertThat(result).containsEntry("authorization","AUTHORIZED").containsEntry("partial",false).containsEntry("redactionReasons",List.of()).containsEntry("downstreamMaterializationProven",false);
     assertThat(map(result.get("run"))).containsEntry("read_only_snapshot",true).containsEntry("snapshot_matches_run",true)
       .containsEntry("managed_content_hash","sha256:"+"a".repeat(64));
     assertThat(rows(result.get("items"))).hasSize(2).allSatisfy(item->assertThat(item).containsEntry("durableAckRecorded",true));
@@ -151,6 +152,30 @@ class AcquisitionEvidenceRuntimeTest {
     assertThat(rows(result.get("partitions"))).singleElement().satisfies(p->assertThat(p)
       .containsEntry("committed_handoff_id",null).containsEntry("complete_ack_prefix",null));
   }
+
+  @Test void redactionReasonsSeparateInvalidMetadataFromDeniedLabelsWithoutDisclosingRows()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN");var a=actor(AcquisitionEvidenceService.CAPABILITIES);
+    var before=counts(f.run());
+    for(String labels:List.of("[]","{}","[{}]","[{\"labelId\":\"UNKNOWN_PRIVATE_LABEL\"}]")){
+      sql.sql("update ouf_ingestion.handoff_outbox set payload_json=jsonb_set(payload_json,'{dataAccessLabels}',cast(:j as jsonb)) where run_id=:r")
+        .param("j",labels).param("r",f.run()).update();
+      var hidden=service.read(query(f,100,null),a);
+      assertThat(hidden).containsEntry("partial",true).containsEntry("authorization","REDACTED")
+        .containsEntry("redactionReasons",List.of("DATA_LABEL_METADATA_INVALID")).containsEntry("nextLineageId",null);
+      assertThat(rows(hidden.get("items"))).isEmpty();
+      assertThat(json.writeValueAsString(hidden)).doesNotContain("UNKNOWN_PRIVATE_LABEL",f.first().toString());
+    }
+    sql.sql("update ouf_ingestion.handoff_outbox set payload_json=payload_json-'dataAccessLabels' where run_id=:r").param("r",f.run()).update();
+    assertThat(service.read(query(f,100,null),a)).containsEntry("redactionReasons",List.of("DATA_LABEL_METADATA_INVALID"));
+    sql.sql("update ouf_ingestion.handoff_outbox set payload_json=jsonb_set(payload_json,'{dataAccessLabels}','[{\"labelId\":\"RESTRICTED\"}]'::jsonb) where run_id=:r")
+      .param("r",f.run()).update();
+    var denied=service.read(query(f,100,null),a);
+    assertThat(denied).containsEntry("redactionReasons",List.of("DATA_LABEL_NOT_AUTHORIZED"));
+    assertThat(rows(denied.get("items"))).isEmpty();
+    assertThat(json.writeValueAsString(denied)).doesNotContain("RESTRICTED",f.first().toString(),"private-row-key");
+    assertThat(counts(f.run())).isEqualTo(before);
+  }
+
   Map<String,Object> counts(UUID run){return sql.sql("select (select count(*) from ouf_ingestion.handoff_outbox where run_id=:r) handoffs,(select count(*) from ouf_ingestion.processing_attempt where run_id=:r) attempts,(select count(*) from ouf_ingestion.ing_lineage where run_id=:r) lineage,(select sum(attempts) from ouf_ingestion.handoff_outbox where run_id=:r) deliveries").param("r",run).query().singleRow();}
   Fixture fixture(String tenant,String label){
     UUID run=UUID.randomUUID();String source="evidence-"+run;

@@ -60,8 +60,10 @@ public class AcquisitionEvidenceService {
       .param("a",q.afterLineageId(),Types.OTHER).param("n",q.limit()+1).query().listOfRows();
     boolean more=rows.size()>q.limit();if(more)rows=rows.subList(0,q.limit());
     var visible=new ArrayList<Map<String,Object>>();boolean redacted=false;
+    var redactionReasons=new TreeSet<String>();
     for(var row:rows){
-      if(!labelsVisible(q,actor,row.get("_labels"))){redacted=true;continue;}
+      String hidden=labelRedactionReason(q,actor,row.get("_labels"));
+      if(hidden!=null){redacted=true;redactionReasons.add(hidden);continue;}
       var item=new LinkedHashMap<>(row);item.remove("_labels");item.remove("_properties");
       item.put("mappedProperties",decode(row.get("_properties")));
       safeReference(item,"raw_hash","sha256:[0-9a-f]{64}");safeReference(item,"output_hash","sha256:[0-9a-f]{64}");
@@ -104,15 +106,21 @@ public class AcquisitionEvidenceService {
     var out=new LinkedHashMap<String,Object>();out.put("schema","ouf.ingestion.acquisition-evidence.v1");out.put("run",run);
     out.put("counts",counts);out.put("items",visible);out.put("partitions",partitions);out.put("partitionTruncated",partitionTruncated);
     out.put("nextLineageId",more&&!redacted?rows.getLast().get("lineage_id"):null);out.put("partial",redacted||more||partitionTruncated);
+    out.put("redactionReasons",List.copyOf(redactionReasons));
     out.put("authorization",redacted?"REDACTED":"AUTHORIZED");out.put("authorizationDecisionRef",actor.owner().decisionRef());
     out.put("downstreamMaterializationProven",false);return out;
   }
-  private boolean labelsVisible(AcquisitionEvidenceApi.Query q,TrustedAuthorizationContext.Context actor,Object raw){
-    Object labels=decode(raw);if(!(labels instanceof List<?> list)||list.isEmpty())return false;
-    for(Object entry:list){if(!(entry instanceof Map<?,?> m)||!(m.get("labelId") instanceof String label)
-        ||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(label))return false;
-      if(!permitted(q,actor,label))return false;}
-    return true;
+  // Fixed diagnostic categories only: never serialize denied labels, row IDs or counts.
+  private String labelRedactionReason(AcquisitionEvidenceApi.Query q,TrustedAuthorizationContext.Context actor,Object raw){
+    Object labels=decode(raw);
+    if(!(labels instanceof List<?> list)||list.isEmpty())return "DATA_LABEL_METADATA_INVALID";
+    for(Object entry:list){
+      if(!(entry instanceof Map<?,?> m)||!(m.get("labelId") instanceof String label)
+          ||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(label))
+        return "DATA_LABEL_METADATA_INVALID";
+      if(!permitted(q,actor,label))return "DATA_LABEL_NOT_AUTHORIZED";
+    }
+    return null;
   }
   private void require(AcquisitionEvidenceApi.Query q,TrustedAuthorizationContext.Context actor,String label){
     if(!permitted(q,actor,label))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"ING_ACQUISITION_NOT_AUTHORIZED");
