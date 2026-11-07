@@ -25,8 +25,8 @@ public final class ManagedTabularAdapter implements AdapterSpi {
     Limits limits=new Limits((int)number(c,"maxRows",1,1_000_000),(int)number(c,"maxColumns",1,10_000),(int)number(c,"maxCellChars",1,1_000_000));
     List<String> keys=strings(c.get("identityFields"));
     long resume=checkpoint==null||checkpoint.value().isEmpty()?0:number(checkpoint.value(),"ordinal",0,Integer.MAX_VALUE);
+    if("INTERNAL_MANAGED_CSV".equals(bundle.acquisitionMode()))return csvCursor(bundle,bytes,keys,limits,resume);
     List<SourceRecord> rows=switch(bundle.acquisitionMode()){
-      case "INTERNAL_MANAGED_CSV" -> csv(bundle,bytes,keys,limits);
       case "INTERNAL_MANAGED_XLSX" -> xlsx(bundle,bytes,keys,limits,required(c,"sheet"));
       default -> throw error("ING_MANAGED_MODE_UNSUPPORTED",ErrorClass.CONFIGURATION);
     };
@@ -34,22 +34,64 @@ public final class ManagedTabularAdapter implements AdapterSpi {
     return new Cursor(rows,(int)resume);
   }
 
-  private List<SourceRecord> csv(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits){
+  // Validate every input row before yielding any record, preserving the prior
+  // all-file admission behavior without retaining the full table in the heap.
+  private RecordCursor csvCursor(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits,long resume){
+    long count=0;Set<String> ids=new HashSet<>();
+    try(CSVParser parser=csvParser(b,bytes,limits)){
+      int headers=parser.getHeaderNames().size();
+      for(CSVRecord record:parser){
+        if(count>=limits.rows)throw error("ING_MANAGED_TOO_MANY_ROWS",ErrorClass.DATA);
+        SourceRecord row=csvRecord(b,record,headers,keys,limits);
+        if(!ids.add(row.sourceObjectId()))throw error("ING_MANAGED_DUPLICATE_IDENTITY",ErrorClass.DATA);
+        count++;
+      }
+    }catch(AdapterException e){throw e;}catch(IOException|RuntimeException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
+    if(resume>count)throw error("ING_CHECKPOINT_OUT_OF_RANGE",ErrorClass.CONFIGURATION);
+    return new CsvCursor(b,bytes,keys,limits,resume);
+  }
+
+  private static CSVParser csvParser(ExecutionBundle b,byte[] bytes,Limits limits){
     Object rawDelimiter=b.configuration().getOrDefault("csvDelimiter",",");
     if(!(rawDelimiter instanceof String delimiter)||!Set.of(",",";").contains(delimiter))
       throw error("ING_MANAGED_CSV_DIALECT_INVALID",ErrorClass.CONFIGURATION);
-    int start=bytes.length>=3&&(bytes[0]&0xff)==0xef&&(bytes[1]&0xff)==0xbb
-        &&(bytes[2]&0xff)==0xbf?3:0;
-    try(Reader reader=new InputStreamReader(new ByteArrayInputStream(bytes,start,bytes.length-start),StandardCharsets.UTF_8)){
+    int start=bytes.length>=3&&(bytes[0]&0xff)==0xef&&(bytes[1]&0xff)==0xbb&&(bytes[2]&0xff)==0xbf?3:0;
+    try{
       CSVFormat format=CSVFormat.RFC4180.builder().setDelimiter(delimiter.charAt(0))
           .setHeader().setSkipHeaderRecord(true).setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).get();
-      List<SourceRecord> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
-      for(CSVRecord record:format.parse(reader)){
-        if(record.size()>limits.columns)throw error("ING_MANAGED_TOO_MANY_COLUMNS",ErrorClass.DATA);
-        Map<String,Object> row=new LinkedHashMap<>(); record.toMap().forEach((k,v)->row.put(k,checked(v,limits)));
-        append(b,out,ids,row,"csv",record.getRecordNumber(),keys,limits);
-      } return List.copyOf(out);
+      CSVParser parser=format.parse(new InputStreamReader(new ByteArrayInputStream(bytes,start,bytes.length-start),StandardCharsets.UTF_8));
+      if(parser.getHeaderNames().isEmpty()||parser.getHeaderNames().size()>limits.columns){
+        parser.close();throw error("ING_MANAGED_TOO_MANY_COLUMNS",ErrorClass.DATA);
+      }
+      return parser;
     }catch(AdapterException e){throw e;}catch(IOException|IllegalArgumentException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}
+  }
+
+  private static SourceRecord csvRecord(ExecutionBundle b,CSVRecord record,int headers,List<String> keys,Limits limits){
+    if(record.size()>headers||record.size()>limits.columns)throw error("ING_MANAGED_TOO_MANY_COLUMNS",ErrorClass.DATA);
+    Map<String,Object> row=new LinkedHashMap<>();record.toMap().forEach((k,v)->row.put(k,checked(v,limits)));
+    long ordinal=record.getRecordNumber();
+    String id=ManagedIdentity.sourceObjectId(b.sourceId(),required(b.configuration(),"expectedHash"),"csv",ordinal,row,keys);
+    return new SourceRecord(id,ordinal,row,Map.of("managedObjectRef",b.bindingRef(),"sheet","csv","rowOrdinal",ordinal));
+  }
+
+  private static final class CsvCursor implements RecordCursor{
+    private final CSVParser parser;private final Iterator<CSVRecord> records;
+    private final ExecutionBundle bundle;private final List<String> keys;private final Limits limits;
+    private final int headers;private long position;private boolean closed;
+    CsvCursor(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits,long resume){
+      bundle=b;this.keys=keys;this.limits=limits;parser=csvParser(b,bytes,limits);
+      records=parser.iterator();headers=parser.getHeaderNames().size();
+      while(position<resume){records.next();position++;}
+    }
+    public Optional<SourceRecord> next(){
+      if(closed)return Optional.empty();
+      if(!records.hasNext())return Optional.empty();
+      SourceRecord row=csvRecord(bundle,records.next(),headers,keys,limits);position++;
+      return Optional.of(row);
+    }
+    public Checkpoint checkpoint(){return new Checkpoint(Map.of("ordinal",(int)position));}
+    public void close(){if(!closed){closed=true;try{parser.close();}catch(IOException e){throw error("ING_MANAGED_CSV_INVALID",ErrorClass.DATA);}}}
   }
 
   private List<SourceRecord> xlsx(ExecutionBundle b,byte[] bytes,List<String> keys,Limits limits,String sheetName){

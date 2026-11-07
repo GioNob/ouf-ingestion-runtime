@@ -62,13 +62,63 @@ class ManagedTabularAdapterTest {
       .isInstanceOf(AdapterSpi.AdapterException.class).hasMessage("ING_MANAGED_FORMULA_FORBIDDEN");
   }
 
+  @Test void wideCsvRemainsOneObjectPerRowWithStableResumeAndFullWidth(){
+    for(int columns:List.of(300,400,1024)){
+      StringBuilder csv=new StringBuilder();
+      for(int c=0;c<columns;c++)csv.append(c==0?"":";").append("campo_").append(c);csv.append('\n');
+      for(int r=0;r<3;r++){for(int c=0;c<columns;c++)csv.append(c==0?"":";").append("r").append(r).append("c").append(c);csv.append('\n');}
+      byte[] bytes=csv.toString().getBytes(StandardCharsets.UTF_8);
+      var b=bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("maxColumns",1024,"csvDelimiter",";"));
+      String second;AdapterSpi.Checkpoint checkpoint;
+      try(var cursor=adapter(bytes).open(b,new AdapterSpi.Checkpoint(Map.of()))){
+        assertThat(cursor.next().orElseThrow().payload()).hasSize(columns);checkpoint=cursor.checkpoint();
+        var row=cursor.next().orElseThrow();second=row.sourceObjectId();
+        assertThat(row.payload()).containsEntry("campo_"+(columns-1),"r1c"+(columns-1));
+      }
+      try(var cursor=adapter(bytes).open(b,checkpoint)){
+        assertThat(cursor.next().orElseThrow().sourceObjectId()).isEqualTo(second);
+        assertThat(cursor.next().orElseThrow().payload()).hasSize(columns);
+        assertThat(cursor.next()).isEmpty();
+      }
+    }
+  }
+
+  @Test void extraFieldsAndLateInvalidRowsAreRejectedBeforeAnyCursorIsReturned(){
+    for(String csv:List.of("a;b\n1;2;3\n","a;b\n1;2\n3;"+"x".repeat(1001)+"\n")){
+      byte[] bytes=csv.getBytes(StandardCharsets.UTF_8);
+      assertThatThrownBy(()->adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("maxColumns",1024,"csvDelimiter",";")),new AdapterSpi.Checkpoint(Map.of())))
+          .isInstanceOf(AdapterSpi.AdapterException.class);
+    }
+    String header=java.util.stream.IntStream.range(0,1025).mapToObj(n->"campo_"+n).collect(java.util.stream.Collectors.joining(";"))+"\n";
+    byte[] bytes=header.getBytes(StandardCharsets.UTF_8);
+    assertThatThrownBy(()->adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("maxColumns",1024,"csvDelimiter",";")),new AdapterSpi.Checkpoint(Map.of())))
+        .hasMessage("ING_MANAGED_TOO_MANY_COLUMNS");
+  }
+
+  @Test void maximumSparseProfileCanBeReadWithoutRetainingAllRows(){
+    String header=java.util.stream.IntStream.range(0,1024).mapToObj(n->"campo_"+n).collect(java.util.stream.Collectors.joining(";"))+"\n";
+    byte[] bytes=(header+(";".repeat(1023)+"\n").repeat(10000)).getBytes(StandardCharsets.UTF_8);
+    long start=System.nanoTime();int count=0;
+    var b=bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("maxColumns",1024,"maxRows",10000,"csvDelimiter",";"));
+    try(var cursor=adapter(bytes).open(b,new AdapterSpi.Checkpoint(Map.of()))){
+      for(var row=cursor.next();row.isPresent();row=cursor.next()){
+        assertThat(row.get().payload()).hasSize(1024);count++;
+      }
+      assertThat(cursor.checkpoint().value()).containsEntry("ordinal",10000);
+    }
+    assertThat(count).isEqualTo(10000);
+    long elapsed=(System.nanoTime()-start)/1_000_000;
+    assertThat(elapsed).isLessThan(120_000);
+    System.out.println("OUF_WIDE_INGESTION_PROBE={\"columns\":1024,\"rows\":"+count+",\"elapsedMs\":"+elapsed+",\"maxHeapBytes\":"+Runtime.getRuntime().maxMemory()+"}");
+  }
+
   private List<String> ids(byte[] bytes){
     var c=adapter(bytes).open(bundle("INTERNAL_MANAGED_CSV",bytes,Map.of("identityFields",List.of("id"))),new AdapterSpi.Checkpoint(Map.of("ordinal",0)));
     List<String> ids=new ArrayList<>();for(var r=c.next();r.isPresent();r=c.next())ids.add(r.get().sourceObjectId());return ids;
   }
   private ManagedTabularAdapter adapter(byte[] bytes){return new ManagedTabularAdapter((ref,size,hash)->bytes);}
   private ExecutionBundle bundle(String mode,byte[] bytes,Map<String,Object> extra){
-    Map<String,Object> c=new HashMap<>(extra);c.put("expectedSize",(long)bytes.length);c.put("expectedHash",sha(bytes));c.put("maxRows",100);c.put("maxColumns",20);c.put("maxCellChars",1000);
+    Map<String,Object> c=new HashMap<>(extra);c.put("expectedSize",(long)bytes.length);c.put("expectedHash",sha(bytes));c.putIfAbsent("maxRows",100);c.putIfAbsent("maxColumns",20);c.put("maxCellChars",1000);
     return new ExecutionBundle("bundle","1",sha(bytes),"source-1",mode,"object:1",c);
   }
   private static String sha(byte[] bytes){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}catch(Exception e){throw new IllegalStateException(e);}}
