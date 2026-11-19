@@ -1,0 +1,56 @@
+name: Bounded acquisition evidence owner read
+on:
+  push:
+    branches: [feat/acquisition-evidence-read-20261025]
+  pull_request:
+    paths:
+      - '**/AcquisitionEvidence*'
+      - '**/GatewayReadReceiptVerifier*'
+      - '**/IngestionGatewayReadSecurityConfiguration.java'
+      - '.github/workflows/acquisition-evidence-read.yml'
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  owner-postgres17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: ouf_ingestion, POSTGRES_USER: ouf_ingestion, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf_ingestion -d ouf_ingestion" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OUF_ING_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_ingestion
+      OUF_ING_DB_USER: ouf_ingestion
+      OUF_ING_DB_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - run: bash scripts/install-authorization-sdk.sh
+      - name: Verify actual read transaction, owner filtering, receipt scopes and existing ACK semantics
+        run: mvn -B -ntp -Dtest=AcquisitionEvidenceRuntimeTest,AcquisitionEvidenceApiTest,GatewayReadReceiptVerifierTest,DurableAckTest test
+      - name: Package actual isolated read image
+        run: |
+          mvn -B -ntp -DskipTests package
+          docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" -f Dockerfile.acquisition-read -t ouf-acquisition-read:ci .
+          docker image inspect ouf-acquisition-read:ci > target/acquisition-image-config.json
+      - name: Prove packaged image HTTP admission and denied mutation
+        env: {EVIDENCE_READ_IMAGE: 'ouf-acquisition-read:ci'}
+        run: mvn -B -ntp -Dtest=AcquisitionEvidenceRuntimeTest#packagedImageUsesSignedHttpReadAndDeniesMutation test
+      - name: Retain qualified image bytes
+        run: |
+          mkdir -p target/acquisition-release
+          docker image inspect --format '{{.Id}}' ouf-acquisition-read:ci > target/acquisition-release/image-id.txt
+          docker save ouf-acquisition-read:ci | gzip -1 > target/acquisition-release/image.tar.gz
+          cp target/acquisition-image-config.json target/acquisition-release/
+          printf '%s\n' "$GITHUB_SHA" > target/acquisition-release/source-commit.txt
+          cd target/acquisition-release && sha256sum image.tar.gz image-id.txt acquisition-image-config.json source-commit.txt > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with: {name: 'acquisition-read-image-${{ github.run_id }}', path: target/acquisition-release/, retention-days: 30}
+      - name: Retain direct evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'acquisition-evidence-owner-${{ github.run_id }}', path: target/surefire-reports/, retention-days: 30}

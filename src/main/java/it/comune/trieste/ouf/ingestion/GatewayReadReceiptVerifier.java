@@ -14,7 +14,7 @@ import java.util.*;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-/** Authenticates only the two closed READ operations; never trusts ordinary identity headers. */
+/** Authenticates the closed READ operations; never trusts ordinary identity headers. */
 public final class GatewayReadReceiptVerifier {
   public static final String HEADER="X-OUF-Ingestion-Read-Receipt", SCOPE="ingestion.operations.read";
   static final String PREFIX="/api/internal/v1/ingestion/operations/", DOMAIN="ouf-ingestion-read-owner-v1.";
@@ -49,7 +49,8 @@ public final class GatewayReadReceiptVerifier {
   }
   static boolean text(String s,int max){return s!=null&&!s.isBlank()&&s.length()<=max&&s.chars().noneMatch(c->Character.isISOControl(c));}
   static String capability(String path) {
-    return switch(path){case PREFIX+"status"->"ouf.ingestion.status";case PREFIX+"history"->"ouf.ingestion.history";default->throw denied();};
+    return switch(path){case PREFIX+"status"->"ouf.ingestion.status";case PREFIX+"history"->"ouf.ingestion.history";
+      case PREFIX+"acquisition"->"ouf.ingestion.acquisition.read";default->throw denied();};
   }
   static SecurityException denied(){return new SecurityException("INGESTION_GATEWAY_READ_RECEIPT_INVALID");}
   static byte[] decode(String value) {
@@ -79,7 +80,7 @@ public final class GatewayReadReceiptVerifier {
       if(!String.join(" ",roles).equals(r.roles()))throw denied();
       var scopes=new HashSet<String>();for(String scope:r.scope().split(" ",-1))
         if(!scope.matches("[A-Za-z0-9_:./-]{1,256}")||!scopes.add(scope)||scopes.size()>128)throw denied();
-      if(!scopes.contains(SCOPE))throw denied();
+      if(!scopes.containsAll(path.equals(PREFIX+"acquisition")?AcquisitionEvidenceService.CAPABILITIES:Set.of(SCOPE)))throw denied();
       return new PrincipalContext(r.subject(),r.tenant(),PrincipalContext.ActorType.HUMAN,r.workload(),r.acr(),r.issuer(),r.audience(),
           scopes,new PrincipalContext.IdentityClaims(roles,r.acr(),Set.of(),null));
     }catch(Exception e){throw denied();}

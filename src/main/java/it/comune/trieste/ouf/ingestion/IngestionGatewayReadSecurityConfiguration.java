@@ -33,7 +33,7 @@ public class IngestionGatewayReadSecurityConfiguration {
     return new GatewayReadReceiptVerifier(file,issuer,audience,workload);
   }
   @Bean @Order(0) SecurityFilterChain ingestionGatewayReadChain(HttpSecurity http,GatewayReadReceiptVerifier verifier)throws Exception {
-    http.securityMatcher(GatewayReadReceiptVerifier.PREFIX+"status",GatewayReadReceiptVerifier.PREFIX+"history");
+    http.securityMatcher(GatewayReadReceiptVerifier.PREFIX+"status",GatewayReadReceiptVerifier.PREFIX+"history",GatewayReadReceiptVerifier.PREFIX+"acquisition");
     http.csrf(c->c.disable());http.sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
     http.exceptionHandling(e->e.authenticationEntryPoint((request,response,error)->response.sendError(401)));
     http.authorizeHttpRequests(a->a.anyRequest().authenticated());
