@@ -1,0 +1,10 @@
+# Built from the already packaged, tested owner artifact; ordinary Dockerfile unchanged.
+FROM eclipse-temurin:21-jre-alpine
+RUN apk upgrade --no-cache && addgroup -g 10002 ouf && adduser -S -D -H -u 10002 -G ouf ouf
+WORKDIR /app
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$SOURCE_REVISION ouf.component=acquisition-evidence-read
+COPY target/ingestion-runtime-*.jar /app/app.jar
+USER 10002:10002
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["java","-Dloader.main=it.comune.trieste.ouf.evidence.IngestionAcquisitionReadApplication","-cp","/app/app.jar","org.springframework.boot.loader.launch.PropertiesLauncher"]

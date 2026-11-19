@@ -32,6 +32,17 @@ class GatewayReadReceiptVerifierTest {
     var c=verifier().verify(sign(receipt()),"POST",PATH,BODY,"corr","11111111-1111-4111-8111-111111111111","idem");
     assertEquals("human-a",c.subjectId());assertEquals("HUMAN",c.actorType().name());assertEquals("tenant-a",c.tenantId());assertEquals("workload",c.servicePrincipalId());assertEquals(Set.of("ouf:reader","ouf:viewer"),c.claims().externalRoleRefs());
   }
+  @Test void acquisitionReceiptRequiresEveryDistinctReadScopeAndCannotReuseOperationalAuthority()throws Exception{
+    String path=GatewayReadReceiptVerifier.PREFIX+"acquisition";
+    var r=receipt();r.put("path",path);r.put("capability","ouf.ingestion.acquisition.read");
+    assertThrows(SecurityException.class,()->verifier().verify(sign(r),"POST",path,BODY,"corr","11111111-1111-4111-8111-111111111111","idem"));
+    r.put("scope",String.join(" ",new TreeSet<>(AcquisitionEvidenceService.CAPABILITIES)));
+    assertEquals(AcquisitionEvidenceService.CAPABILITIES,verifier().verify(sign(r),"POST",path,BODY,"corr","11111111-1111-4111-8111-111111111111","idem").scopes());
+    for(String missing:AcquisitionEvidenceService.CAPABILITIES){
+      var caps=new TreeSet<>(AcquisitionEvidenceService.CAPABILITIES);caps.remove(missing);r.put("scope",String.join(" ",caps));
+      assertThrows(SecurityException.class,()->verifier().verify(sign(r),"POST",path,BODY,"corr","11111111-1111-4111-8111-111111111111","idem"));
+    }
+  }
   @Test void realLuaVectorsCrossTheJavaOwnerVerifier()throws Exception{
     String path=System.getenv("OUF_INGESTION_READ_LUA_VECTORS");Assumptions.assumeTrue(path!=null,"cross-repository gate supplies actual Lua vectors");
     var values=JSON.readTree(Files.readAllBytes(Path.of(path)));assertEquals(2,values.get("vectors").size());
