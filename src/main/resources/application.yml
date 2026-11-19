@@ -26,3 +26,11 @@ ouf.ingestion.iam:
   enabled: ${OUF_ING_IAM_ENABLED:false}
   issuer: ${OUF_ING_IAM_ISSUER:}
   audience: ${OUF_ING_IAM_AUDIENCE:}
+
+# Exact Gateway owner-receipt boundary; bindings must come from the approved installation profile.
+ouf.ingestion.gateway-read:
+  enabled: ${OUF_ING_GATEWAY_READ_ENABLED:false}
+  issuer: ${OUF_ING_GATEWAY_READ_ISSUER:}
+  audience: ${OUF_ING_GATEWAY_READ_AUDIENCE:}
+  workload: ${OUF_ING_GATEWAY_READ_WORKLOAD:}
+  key-file: ${OUF_ING_GATEWAY_READ_KEY_FILE:}

@@ -47,7 +47,7 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   }
   if(!seen.equals(expected))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
  }
- public Map<String,Object> frozenConfiguration(String source,UUID version){return get("/api/onboarding/v1/sources/"+escape(source)+"/onboarding-versions/"+version);}
+ public Map<String,Object> frozenConfiguration(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/ingestion-configuration?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
  public Map<String,Object> compatibility(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/compatibility/ingestion-runtime?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
  public Map<String,Object> attestCompatibility(String source,UUID version,String hash,long rows){return exchange("/api/internal/v1/onboarding/compatibility/ingestion-runtime",Map.of("sourceId",source,"onboardingVersionId",version.toString(),"configurationHash",hash,"compatible",true,"detail","Bounded frozen managed configuration probe PASS; validatedRows="+rows),201);}
  private Map<String,Object> get(String path){return exchange(path,null,200);}
