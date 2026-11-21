@@ -13,6 +13,21 @@ public final class GatewayWfsAdapter implements AdapterSpi {
   public GatewayWfsAdapter(RuntimePorts.GatewaySourcePort gateway){this.gateway=Objects.requireNonNull(gateway);}
   public String adapterId(){return "gateway-wfs-v1";}public Set<String> acquisitionModes(){return Set.of("WFS");}public Compatibility compatibility(){return new Compatibility("1.0.0","1.0.0");}
   public RecordCursor open(ExecutionBundle b,Checkpoint checkpoint){requireGateway(b);return new Cursor(b,checkpoint==null?Map.of():checkpoint.value());}
+  PullSchema.Comparison observe(ExecutionBundle bundle) {
+    requireGateway(bundle);
+    var config=bundle.configuration();
+    String collection=PullSchema.profile(bundle).path("origin").path("collection").asText(text(config,"typeName","feature"));
+    byte[] bytes=gateway.fetch(bundle.bindingRef(),Map.of("resource","schema","collection",collection),text(config,"correlationId","runtime"));
+    if(bytes.length>integer(config,"maxPageBytes",5_000_000,1,50_000_000)) throw error("ING_PAGE_TOO_LARGE",ErrorClass.DATA);
+    try {
+      var declaration=new com.fasterxml.jackson.databind.ObjectMapper().readTree(bytes);
+      if(declaration==null) declaration=com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+      return PullSchema.compare(bundle,declaration,declaration);
+    } catch(java.io.IOException e) {
+      var missing=com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+      return PullSchema.compare(bundle,missing,missing);
+    }
+  }
   private final class Cursor implements RecordCursor {
     private final ExecutionBundle b;private final int count,maxPages,maxRecords,maxBytes;private final String typeName,typeCode,axisOrder,correlation;private final List<String> keys;private final Deque<SourceRecord> buffer=new ArrayDeque<>();private int startIndex,pageOffset,pages,records,ordinal;private boolean loaded,done;
     Cursor(ExecutionBundle b,Map<String,Object> cp){this.b=b;Map<String,Object> c=b.configuration();count=integer(c,"pageSize",100,1,10_000);maxPages=integer(c,"maxPages",1000,1,100_000);maxRecords=integer(c,"maxRecords",100_000,1,1_000_000);maxBytes=integer(c,"maxPageBytes",5_000_000,1,50_000_000);typeName=text(c,"typeName","feature");typeCode=text(c,"typeCode",typeName);axisOrder=text(c,"axisOrder","AUTHORITY");if(!Set.of("AUTHORITY","LON_LAT","LAT_LON").contains(axisOrder))throw error("ING_WFS_AXIS_ORDER_INVALID",ErrorClass.CONFIGURATION);correlation=text(c,"correlationId","runtime");keys=strings(c,"identityFields");startIndex=cp.get("startIndex") instanceof Number n?n.intValue():0;pageOffset=cp.get("pageOffset") instanceof Number n?n.intValue():0;records=cp.get("recordIndex") instanceof Number n?n.intValue():0;ordinal=records;}

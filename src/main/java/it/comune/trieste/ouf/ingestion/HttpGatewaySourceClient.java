@@ -52,13 +52,13 @@ public final class HttpGatewaySourceClient implements RuntimePorts.GatewaySource
   }
 
   private RuntimePorts.GatewayFailure classified(int status,HttpHeaders headers){
-    if(status==429)return failure("ING_GATEWAY_429",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,retryAfter(headers).orElse(null));
+    if(status==429)return failure("ING_GATEWAY_429",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,retryAfter(headers,clock).orElse(null));
     if(status==408||status>=500)return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);
     if(status==401||status==403)return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.AUTH_ROUTE,null);
     return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.CONFIGURATION,null);
   }
 
-  private Optional<Duration> retryAfter(HttpHeaders headers){
+  static Optional<Duration> retryAfter(HttpHeaders headers,Clock clock){
     Optional<String> value=headers.firstValue("Retry-After");if(value.isEmpty()||value.orElseThrow().isBlank())return Optional.empty();String raw=value.orElseThrow().strip();
     try{long seconds=Long.parseLong(raw);return seconds>0?Optional.of(Duration.ofSeconds(seconds)):Optional.empty();}catch(NumberFormatException ignored){}
     try{Instant at=ZonedDateTime.parse(raw,DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();long seconds=ChronoUnit.SECONDS.between(clock.instant(),at);return seconds>0?Optional.of(Duration.ofSeconds(seconds)):Optional.empty();}catch(Exception ignored){return Optional.empty();}

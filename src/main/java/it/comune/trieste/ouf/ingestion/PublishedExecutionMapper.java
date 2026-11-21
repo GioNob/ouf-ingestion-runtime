@@ -48,6 +48,12 @@ public final class PublishedExecutionMapper {
       if(keys.equals(List.of("$managedRowOrdinal")))config.put("identityFields",List.of());
     }else if(!Set.of("REST_JSON","WFS").contains(mode))throw invalid();
     if(config.get("changeRepresentationProfile")==null)throw new IllegalArgumentException("ING_CHANGE_PROFILE_REQUIRED");
+    if("REST_JSON".equals(mode) || "WFS".equals(mode)) {
+      // Carry the publisher's version into the canonical envelope as well as the poll comparison.
+      var mapped=new ExecutionBundle(snapshot.bundleId(),snapshot.bundleVersion(),snapshot.checksum(),snapshot.sourceId(),mode,binding,config);
+      var api=PullSchema.profile(mapped).path("readParameters").path("api");
+      if(api.path("schemaVersion").isTextual()) config.put("sourceSchemaVersion",api.get("schemaVersion").textValue());
+    }
     return new ExecutionBundle(snapshot.bundleId(),snapshot.bundleVersion(),snapshot.checksum(),snapshot.sourceId(),mode,binding,config);
   }
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("ING_EXECUTION_PROFILE_INVALID");}

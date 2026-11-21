@@ -53,7 +53,7 @@ public final class CanonicalRecordPipeline {
       durable.stage(new DurablePipelineRepository.StageCommand(c.runId(),c.partitionKey(),c.sequenceNo(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),bundleRef(c.bundle()),idempotency(c,"handoff"),payload,evidence,c.restartCheckpoint(),c.candidateWatermark(),c.claim()),attempt,lineage,handoff);
       return new Result(attempt,lineage,handoff,null);
     }catch(RuntimeException failure){
-      if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED").contains(failure.getMessage()))throw failure;
+      if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED","ING_SCHEMA_CONSUMPTION_FENCED").contains(failure.getMessage()))throw failure;
       String code=safeCode(failure);UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);
       boolean blocking=!nonBlocking(c.bundle(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"contract-or-mapping:"+code,c.correlationId(),blocking);
       return new Result(failed,null,null,quarantineId,blocking);
@@ -63,7 +63,7 @@ public final class CanonicalRecordPipeline {
   public Result reject(Command c,String reasonCode){
     durable.requireRecoveryBudget(c.runId(),c.claim());
     String code=reasonCode!=null&&reasonCode.matches("ING_[A-Z0-9_]{1,76}")?reasonCode:"ING_PROCESSING_REJECTED";String rawRef=sourceRef(c.record());
-    try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED").contains(ignored.getMessage()))throw ignored;}
+    try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED","ING_SCHEMA_CONSUMPTION_FENCED").contains(ignored.getMessage()))throw ignored;}
     durable.requireRecoveryBudget(c.runId(),c.claim());
     UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId,true);
   }

@@ -5,7 +5,9 @@ public final class RuntimePorts {private RuntimePorts(){}
   public interface ActiveBundlePort {ExecutionBundle loadAndVerify(String sourceId);default ExecutionBundle loadAndVerify(RunStateRepository.ScheduleClaim claim){return loadAndVerify(claim.sourceId());}}
   public interface HistoricalBundlePort {ExecutionBundle loadHistoricalAndVerify(String sourceId,String bundleRef);}
   public interface AdapterResolver {AdapterSpi resolve(ExecutionBundle bundle);}
-  public interface OnboardingReviewPort {Receipt request(UUID issueId,String sourceId,String evidenceRef,String correlationId,String idempotencyKey);record Receipt(String reviewRef,boolean durable){} }
+  public interface OnboardingReviewPort {Receipt request(UUID issueId,String sourceId,String evidenceRef,String correlationId,String idempotencyKey);
+    default Optional<Receipt> reconcile(UUID issueId,String sourceId,String key){return Optional.empty();}
+    record Receipt(String reviewRef,boolean durable){} }
   public interface GatewaySourcePort {byte[] fetch(String governedBindingRef,Map<String,Object> request,String correlationId);}
   public static final class GatewayFailure extends RuntimeException {
     private final String safeCode;private final AdapterSpi.ErrorClass errorClass;private final Duration retryAfter;

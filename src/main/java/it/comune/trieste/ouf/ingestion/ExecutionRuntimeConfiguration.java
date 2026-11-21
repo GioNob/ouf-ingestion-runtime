@@ -17,6 +17,9 @@ public class ExecutionRuntimeConfiguration {
     };
   }
   @Bean CanonicalRecordPipeline executionPipeline(ObjectMapper json,FrozenContractValidator contracts,DurablePipelineRepository durable,QuarantineService quarantine,ExecutionGatewayClient gateway){return new CanonicalRecordPipeline(json,contracts,durable,quarantine,gateway);}
-  @Bean RunExecutionWorker executionWorker(RunExecutionRepository runs,RuntimePorts.AdapterResolver adapters,CanonicalRecordPipeline pipeline,SchemaSurveillanceService schemas,RunStateRepository health){return new RunExecutionWorker(runs,adapters,pipeline,schemas,health);}
+  @Bean RunExecutionWorker executionWorker(RunExecutionRepository runs,RuntimePorts.AdapterResolver adapters,CanonicalRecordPipeline pipeline,SchemaSurveillanceService schemas,RunStateRepository health,PullSchemaGate gate){return new RunExecutionWorker(runs,adapters,pipeline,schemas,health,gate);}
+  @Bean OnboardingReviewDispatcher schemaReviewDispatcher(OnboardingReviewRepository queue,RuntimePorts.OnboardingReviewPort port) {
+    return new OnboardingReviewDispatcher(queue,port);
+  }
   @Bean OutboxDispatcher executionDispatcher(DurablePipelineRepository repository,ExecutionGatewayClient gateway,IngestionMetrics metrics){return new OutboxDispatcher(repository,gateway,metrics);}
 }

@@ -29,7 +29,8 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
       new Migration("15","V15__human_recovery_sessions.sql",-1837994869),
       new Migration("16","V16__incident_observation_time.sql",-405299983),
       new Migration("17","V17__incident_publication_and_cursor.sql",-1241321010),
-      new Migration("18","V18__incident_publication_bookmarks.sql",1281376280));
+      new Migration("18","V18__incident_publication_bookmarks.sql",1281376280),
+      new Migration("19","V19__pull_schema_gate.sql",-1645788495));
   private final DataSource source;
   public IngestionReadinessHealthIndicator(DataSource source){this.source=source;}
 
@@ -68,7 +69,7 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
         }
         if(count!=EXPECTED.size())return incompatible();
         return Health.up().withDetail("postgresVersion",postgres).withDetail("flywayRank",rank)
-            .withDetail("schemaVersion","18").withDetail("sqlMigrations",count)
+            .withDetail("schemaVersion","19").withDetail("sqlMigrations",count)
             .withDetail("schemaCompatibility","EXACT_RELEASE_HISTORY")
             .withDetail("transactionReadOnly",true).build();
       }finally{connection.rollback();}
