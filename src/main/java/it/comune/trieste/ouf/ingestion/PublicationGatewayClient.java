@@ -28,6 +28,12 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
  public PublishedActivation decode(Map<String,Object> row){return PublishedActivation.decode(row,tenant,json);}
  @Override public ExecutionBundle loadAndVerify(String source){return active(source).execution();}
  @Override public ExecutionBundle loadAndVerify(RunStateRepository.ScheduleClaim claim){var a=active(claim.sourceId());if(!a.enabled()||claim.publicationId()==null||!a.publicationId().equals(claim.publicationId())||!a.execution().checksum().equals(claim.publicationChecksum()))throw new IllegalArgumentException("ING_ACTIVE_PUBLICATION_CHANGED");return a.execution();}
+ public void verifyForRetry(ExecutionBundle snapshot){
+  var published=active(snapshot.sourceId());
+  if(!published.enabled() || !published.publicationId().toString().equals(snapshot.configuration().get("publicationId"))
+      || !published.execution().checksum().equals(snapshot.checksum()))throw new IllegalArgumentException("ING_ACTIVE_PUBLICATION_CHANGED");
+  preflight(published.execution());
+ }
  private PublishedActivation active(String source){return decode(get("/api/onboarding/v1/runtime/publications/"+escape(source)+"/active"));}
  @Override public void preflight(Collection<String> refs){throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");}
  @Override public ExecutionBundle loadHistoricalAndVerify(String source,String reference){
@@ -56,11 +62,14 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
    if(Thread.currentThread().isInterrupted())throw new InterruptedException();
    var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString());
    if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));
-   var pending=http.sendAsync(builder.build(),info->new BoundedBody());HttpResponse<byte[]> response;
-   try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_RESPONSE_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(InterruptedException cancelled){pending.cancel(true);throw cancelled;}
-   if(response.statusCode()!=expected)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
+   var pending=http.sendAsync(builder.build(),info->info.statusCode()==expected?new BoundedBody():HttpResponse.BodySubscribers.replacing(new byte[0]));HttpResponse<byte[]> response;
+   try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);
+     if(failed.getCause() instanceof IOException io && "ING_PUBLICATION_RESPONSE_TOO_LARGE".equals(io.getMessage()))
+       throw new IllegalArgumentException("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+     throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_RESPONSE_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(InterruptedException cancelled){pending.cancel(true);throw cancelled;}
+   if(response.statusCode()!=expected)throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:Set.of(429,502,503,504).contains(response.statusCode())?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION,RetryPolicy.retryAfter(response.headers()));
    return json.readValue(response.body(),Map.class);
-  }catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(IOException e){throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_IO_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
+  }catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_INTERRUPTED",AdapterSpi.ErrorClass.CONFIGURATION);}catch(IOException e){throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_IO_FAILED",AdapterSpi.ErrorClass.CONFIGURATION);}
  }
  private static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
   private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();private Flow.Subscription subscription;

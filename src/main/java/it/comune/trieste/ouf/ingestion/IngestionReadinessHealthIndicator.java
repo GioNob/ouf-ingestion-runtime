@@ -29,7 +29,8 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
       new Migration("15","V15__human_recovery_sessions.sql",-1837994869),
       new Migration("16","V16__incident_observation_time.sql",-405299983),
       new Migration("17","V17__incident_publication_and_cursor.sql",-1241321010),
-      new Migration("18","V18__incident_publication_bookmarks.sql",1281376280));
+      new Migration("18","V18__incident_publication_bookmarks.sql",1281376280),
+      new Migration("21","V21__repeatable_managed_publication.sql",-1354813991));
   private final DataSource source;
   public IngestionReadinessHealthIndicator(DataSource source){this.source=source;}
 
@@ -50,7 +51,7 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
           if(postgres<170000||postgres>=180000||!"UTF8".equals(facts.getString(2))||!"on".equals(facts.getString(3)))return incompatible();
         }
         int count=0,rank=0;
-        try(ResultSet rows=sql.executeQuery("SELECT installed_rank,version,script,type,checksum,success FROM ouf_ingestion.flyway_schema_history ORDER BY installed_rank LIMIT 21")){
+        try(ResultSet rows=sql.executeQuery("SELECT installed_rank,version,script,type,checksum,success FROM ouf_ingestion.flyway_schema_history ORDER BY installed_rank LIMIT "+(EXPECTED.size()+2))){
           boolean first=true;
           while(rows.next()){
             int installed=rows.getInt(1);
@@ -68,7 +69,7 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
         }
         if(count!=EXPECTED.size())return incompatible();
         return Health.up().withDetail("postgresVersion",postgres).withDetail("flywayRank",rank)
-            .withDetail("schemaVersion","18").withDetail("sqlMigrations",count)
+            .withDetail("schemaVersion",EXPECTED.getLast().version()).withDetail("sqlMigrations",count)
             .withDetail("schemaCompatibility","EXACT_RELEASE_HISTORY")
             .withDetail("transactionReadOnly",true).build();
       }finally{connection.rollback();}
