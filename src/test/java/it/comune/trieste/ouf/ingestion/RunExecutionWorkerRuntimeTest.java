@@ -40,8 +40,43 @@ import org.springframework.transaction.PlatformTransactionManager;
   @Test void explicitNonBlockingQuarantineCompletesWithWarningsOnlyAfterDrain(){
     String source="source-"+UUID.randomUUID();ExecutionBundle base=bundle(source);Map<String,Object> cfg=new LinkedHashMap<>(base.configuration());cfg.put("propertyMappings",List.of(Map.of("sourceField","missing","targetPropertyIri","https://example.test/name","transform","IDENTITY")));cfg.put("nonBlockingQuarantineReasonCodes",List.of("ING_MAPPING_SOURCE_FIELD_MISSING"));ExecutionBundle bundle=new ExecutionBundle(base.bundleId(),base.bundleVersion(),base.checksum(),source,base.acquisitionMode(),base.bindingRef(),cfg);UUID run=state.createPreflightRun(new RunStateRepository.ScheduleClaim(UUID.randomUUID(),"tenant-1",source,300,"scheduler"),bundle,"corr-warning");state.preflightSucceeded(run);sql.sql("update ouf_ingestion.ing_run set created_at='1980-01-01T00:00:00Z' where run_id=:r").param("r",run).update();CanonicalRecordPipeline pipeline=new CanonicalRecordPipeline(json,validator,durable,quarantine,new RecordingLake(),Clock.systemUTC());RunExecutionWorker worker=new RunExecutionWorker(execution,b->new OneRecordAdapter(),pipeline,schemas,state,gate);worker.executeOne("worker-warning");assertThat(state.run(run).get("state")).isEqualTo("COMPLETED_WITH_WARNINGS");assertThat(sql.sql("select blocking from ouf_ingestion.ing_quarantine where run_id=:r").param("r",run).query(Boolean.class).single()).isFalse();assertThat(sql.sql("select severity from ouf_ingestion.runtime_issue where run_id=:r and quarantine_id is not null").param("r",run).query(String.class).single()).isEqualTo("WARNING");assertThat(sql.sql("select committed_watermark_json->>'ordinal' from ouf_ingestion.ing_partition where run_id=:r").param("r",run).query(String.class).single()).isEqualTo("1");assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(Long.class).single()).isZero();
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"MATCH","COMPATIBLE_ADDITIVE","INCOMPATIBLE"})
+  void legacyRestUsesRecordNamesWithoutSchemaFetch(String outcome) {
+    var bundle=pullPublication("legacy-"+UUID.randomUUID(),"REST_JSON","1",1,Map.of()).execution();
+    UUID run=start(bundle,"legacy","1700-01-01T00:00:00Z");
+    String page=switch(outcome) {
+      case "INCOMPATIBLE" -> """
+          {"items":[{"id":"2"}]}
+          """;
+      case "COMPATIBLE_ADDITIVE" -> """
+          {"items":[{"id":"2","name":"Beta","extra":1}]}
+          """;
+      default -> """
+          {"items":[{"id":"2","name":"Beta"}]}
+          """;
+    };
+    var requests=new ArrayList<Map<String,Object>>();
+    var adapter=new GatewayJsonAdapter((binding,request,correlation)->{
+      requests.add(request);
+      return page.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    },json);
+    var pipeline=new CanonicalRecordPipeline(json,validator,durable,quarantine,new RecordingLake(),Clock.systemUTC());
+    assertThat(new RunExecutionWorker(execution,b->adapter,pipeline,schemas,state,gate).executeOne("legacy")).contains(run);
+    assertThat(requests).containsExactly(Map.of("pageSize",10));
+    assertThat(sql.sql("select outcome from ouf_ingestion.schema_observation where run_id=:r and observed_schema_version is null")
+        .param("r",run).query(String.class).single()).isEqualTo(outcome);
+    assertThat(gate.hasOpen(run)).isFalse();
+    if("INCOMPATIBLE".equals(outcome)) {
+      assertThat(state.run(run)).containsEntry("state","PAUSED").containsEntry("failure_code","ING_SCHEMA_INCOMPATIBLE");
+      assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(Long.class).single()).isZero();
+    } else {
+      ackAndComplete(run,"legacy");
+    }
+  }
+
   @Test void realGatewayRestAdapterRunsToUdpAckAndCommittedWatermark(){String source="rest-"+UUID.randomUUID();ExecutionBundle bundle=externalBundle(source,"REST_JSON");UUID run=start(bundle,"corr-rest","1700-01-01T00:00:00Z");RuntimePorts.GatewaySourcePort gateway=verticalGateway("1",BASE_FIELDS,"Town Hall");runVertical(run,new GatewayJsonAdapter(gateway,json),"rest-worker");assertThat(sql.sql("select payload_json#>>'{canonicalPayload,https://example.test/name}' from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(String.class).single()).isEqualTo("Town Hall");ackAndComplete(run,"rest-worker");}
-  @Test void realGatewayWfsAdapterRunsToUdpAckWithCanonicalMapping(){String source="wfs-"+UUID.randomUUID();ExecutionBundle bundle=externalBundle(source,"WFS");UUID run=start(bundle,"corr-wfs","1600-01-01T00:00:00Z");String xml="<wfs:FeatureCollection xmlns:wfs='http://www.opengis.net/wfs/2.0' xmlns:gml='http://www.opengis.net/gml/3.2' xmlns:x='urn:test'><wfs:member><x:place gml:id='p1'><x:id>p1</x:id><x:name>Town Hall</x:name><x:shape srsName='urn:ogc:def:crs:EPSG::4326'>1 2</x:shape></x:place></wfs:member></wfs:FeatureCollection>";runVertical(run,new GatewayWfsAdapter((r,q,c)->xml.getBytes(java.nio.charset.StandardCharsets.UTF_8)),"wfs-worker");assertThat(sql.sql("select payload_json#>>'{canonicalPayload,https://example.test/name}' from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(String.class).single()).isEqualTo("Town Hall");ackAndComplete(run,"wfs-worker");}
+  @Test void realGatewayWfsAdapterRunsToUdpAckWithCanonicalMapping(){String source="wfs-"+UUID.randomUUID();ExecutionBundle bundle=pullPublication(source,"WFS","1",1,Map.of()).execution();UUID run=start(bundle,"corr-wfs","1600-01-01T00:00:00Z");String xml="<wfs:FeatureCollection xmlns:wfs='http://www.opengis.net/wfs/2.0' xmlns:gml='http://www.opengis.net/gml/3.2' xmlns:x='urn:test'><wfs:member><x:place gml:id='p1'><x:id>p1</x:id><x:name>Town Hall</x:name><x:shape srsName='urn:ogc:def:crs:EPSG::4326'>1 2</x:shape></x:place></wfs:member></wfs:FeatureCollection>";runVertical(run,new GatewayWfsAdapter((r,q,c)->{assertThat(q).containsEntry("request","GetFeature");return xml.getBytes(java.nio.charset.StandardCharsets.UTF_8);}),"wfs-worker");assertThat(sql.sql("select payload_json#>>'{canonicalPayload,https://example.test/name}' from ouf_ingestion.handoff_outbox where run_id=:r").param("r",run).query(String.class).single()).isEqualTo("Town Hall");ackAndComplete(run,"wfs-worker");}
   @Test void governedRetryPreservesFailedAttemptAndResolvesOnlyAfterDurableAck(){
     ExecutionBundle bundle=bundle("retry-"+UUID.randomUUID());UUID run=start(bundle,"corr-retry","1400-01-01T00:00:00Z");
     var actor=new TrustedAuthorizationContext.Context("human:operator","HUMAN","tenant-1",Set.of("ouf.ingestion.quarantine.retry","ingestion.run.resume"),"decision://retry");
@@ -204,23 +239,32 @@ import org.springframework.transaction.PlatformTransactionManager;
     return publishedVertical(source,version,fields,1);
   }
   private ExecutionBundle publishedVertical(String source,String version,List<Map<String,Object>> fields,int generation){
-    var envelope=PublishedActivationTest.envelope(source,false,generation);
-    var published=PublishedActivation.map(envelope,"bundle");
-    var execution=new LinkedHashMap<>(externalBundle(source,"REST_JSON").configuration());
-    execution.remove("sourceSchema");
-    execution.put("sourceSchemaVersion",version);execution.put("acquisitionMode","REST_JSON");
     var profile=Map.of("readParameters",Map.of("api",Map.of("schemaVersion",version,"fieldsSha256",PullSchema.fingerprint(json.valueToTree(fields)))),
         "origin",Map.of("collection","places"),"keys",Map.of("declared",List.of(List.of("id"))));
-    published.put("extractionProfile",Map.of("runtime",Map.of("execution",execution),"projection",Map.of("place",List.of("id","name")),"sourceUnitProfile",profile));
+    var publication=pullPublication(source,"REST_JSON",version,generation,profile);
+    activation.reconcile(publication);
+    return publication.execution();
+  }
+
+  private PublishedActivation pullPublication(String source,String mode,String version,int generation,Map<String,?> profile){
+    var envelope=PublishedActivationTest.envelope(source,false,generation);
+    var published=PublishedActivation.map(envelope,"bundle");
+    var execution=new LinkedHashMap<>(externalBundle(source,mode).configuration());
+    execution.remove("sourceSchema");
+    execution.put("sourceSchemaVersion",version);
+    execution.put("acquisitionMode",mode);
+    var extraction=new LinkedHashMap<String,Object>();
+    extraction.put("runtime",Map.of("execution",execution));
+    extraction.put("projection",Map.of("place",execution.get("expectedFieldNames")));
+    if(!profile.isEmpty()) extraction.put("sourceUnitProfile",profile);
+    published.put("extractionProfile",extraction);
     published.put("dataAccessPolicies",List.of(Map.of("label","OPEN")));
     published.put("sourceObjectIdentityPolicy",Map.of("sourceFields",List.of("id")));
     published.put("semanticMapping",Map.of("sourceType",Map.of("typeCode","place","sourceId",source),"propertyMappings",execution.get("propertyMappings")));
     published.put("changeRepresentationProfile",Map.of("mode","FULL_SNAPSHOT"));
     PublishedActivationTest.hash(published);envelope.put("checksum",published.get("checksum"));
     envelope.put("tenantId","tenant-1");
-    var publication=PublishedActivation.decode(envelope,"tenant-1",json);
-    activation.reconcile(publication);
-    return publication.execution();
+    return PublishedActivation.decode(envelope,"tenant-1",json);
   }
 
   private void runVertical(UUID run,AdapterSpi adapter,String worker){CanonicalRecordPipeline pipeline=new CanonicalRecordPipeline(json,validator,durable,quarantine,new RecordingLake(),Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"),ZoneOffset.UTC));assertThat(new RunExecutionWorker(execution,b->adapter,pipeline,schemas,state,gate).executeOne(worker)).contains(run);assertThat(state.run(run).get("state")).isEqualTo("DRAINING");}

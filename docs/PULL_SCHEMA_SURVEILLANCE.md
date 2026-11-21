@@ -2,11 +2,21 @@
 
 ## Lettura e confronto
 
-Il worker legge la pagina REST dal binding già approvato. Prima di estrarre identità, revisioni o proprietà legge la dichiarazione della stessa collezione con lo stesso binding. Su `POST /internal/sources/v1/fetch` i parametri per questa seconda lettura sono `{"resource":"schema","collection":"…"}`. L'adattatore southbound del Gateway deve tradurli in `GET /collections/{c}/schema`. Per le istanze usa `limit`, `collection` quando fissata e il cursore opaco. La pagina già letta alimenta il consumo. Anche le pagine successive e quelle vuote attraversano il controllo. Per un WFS pubblicato il binding deve fornire la dichiarazione equivalente prima di GetFeature.
+Il worker applica D-076 quando riconosce `ouf.vertical-source.v1` da almeno una delle seguenti evidenze.
+
+- Il binding lo dichiara con `sourceContract: "ouf.vertical-source.v1"` nella configurazione di esecuzione approvata (`extractionProfile.runtime.execution` per un bundle pubblicato), oppure la pubblicazione riporta lo stesso `sourceContract` alla radice del bundle.
+- Il profilo immutabile dell'unità dichiara `readParameters.api.schemaVersion`, il campo che il contratto del profilo riserva allo schema della collezione API.
+- La pagina REST contiene il membro JSON `schemaVersion` alla radice. Anche un valore nullo o malformato attiva la verifica e impedisce di consumare la pagina come storica.
+
+La versione `runtime.execution.sourceSchemaVersion` identifica anche schemi storici. Il solo nome della collezione e i campi dentro `items` possono appartenere a dati ordinari. Per questo nessuno di questi elementi seleziona il protocollo verticale.
+
+**REST storica.** Il primo fetch usa `pageSize` e l'eventuale `pageToken` del checkpoint. Se la busta è priva di `schemaVersion` e manca una dichiarazione del contratto, il worker legge le righe piatte con i puntatori configurati, valida la pagina e osserva i nomi dei campi di ciascun record secondo la proiezione approvata. Una pagina vuota termina o prosegue secondo il token successivo. In tutti questi casi le sole richieste alla fonte sono quelle delle pagine dei dati. Il WFS storico effettua direttamente GetFeature e conserva la sorveglianza per record.
+
+**Verticale.** Quando il contratto è già noto, il worker REST chiede le istanze con `limit`, la `collection` se fissata e l'eventuale cursore opaco. Se riconosce il contratto solo dalla risposta, riusa la pagina appena letta. Prima di estrarre i record, chiede la dichiarazione della collezione allo stesso binding con `{"resource":"schema","collection":"…"}` su `POST /internal/sources/v1/fetch`. Il Gateway traduce la richiesta in `GET /collections/{c}/schema`. La verifica si ripete sulle pagine successive e vuote. Un checkpoint verticale conserva il protocollo alla ripartenza. La perdita della versione dopo il riconoscimento mantiene il controllo attivo. Un incidente già aperto richiede ancora una prova di uguaglianza per riprendere. Un WFS che dichiara il contratto deve fornire la dichiarazione equivalente prima di GetFeature.
 
 Il riferimento prioritario è il profilo immutabile del bundle, in particolare `extractionProfile.sourceUnitProfile.readParameters.api.{schemaVersion,fieldsSha256}`. La chiave viene da `keys.declared[0]` e la geometria da `geometry`. Il digest copre il JSON UTF-8 compatto di tutti i campi dichiarati, ordinati per nome, con proprietà ordinate per chiave. Si verificano anche la collezione e l'accordo tra versione della busta e versione della dichiarazione.
 
-Per i bundle storici si conservano `runtime.execution.sourceSchemaRef`, `sourceSchemaVersion`, i nomi della proiezione e la chiave della pubblicazione. Se l'esecuzione include la dichiarazione approvata in `sourceSchema`, il worker usa `fieldsSha256` oppure calcola il digest di `fields`, con `key` e `geometry` della dichiarazione. Un riferimento opaco e una lista di nomi da soli lasciano il consumo in osservazione con `APPROVED_FINGERPRINT_MISSING`. La prima risposta del verticale non può approvare se stessa. Un produttore R2b con sole righe piatte necessita della busta e di una pubblicazione con evidenza tipizzata per il polling governato.
+Per un verticale con un bundle privo del profilo dell'unità, il worker usa la dichiarazione approvata in `runtime.execution.sourceSchema`, con `fieldsSha256` oppure un digest calcolato da `fields`, la chiave e la geometria. Se la pubblicazione offre soltanto un riferimento e i nomi della proiezione, la verifica verticale rileva `APPROVED_FINGERPRINT_MISSING`. L'approvazione dell'impronta deve provenire dalla pubblicazione.
 
 ## Checkpoint, avviso e ripresa
 

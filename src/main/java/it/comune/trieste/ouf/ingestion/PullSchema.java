@@ -23,6 +23,19 @@ final class PullSchema {
     return config;
   }
 
+  static boolean declaresVerticalContract(ExecutionBundle bundle) {
+    return declaresVerticalContract(bundle,profile(bundle).path("readParameters").path("api"));
+  }
+
+  static boolean declaresVerticalContract(ExecutionBundle bundle, JsonNode api) {
+    var config = bundle.configuration();
+    var published = config.get("publishedBundle");
+    String contract = "ouf.vertical-source.v1";
+    return contract.equals(config.get("sourceContract"))
+        || (published instanceof Map<?,?> publication && contract.equals(publication.get("sourceContract")))
+        || api.has("schemaVersion");
+  }
+
   static Comparison compare(ExecutionBundle bundle, JsonNode page, JsonNode declaration) {
     JsonNode config = JSON.valueToTree(bundle.configuration());
     JsonNode unit = profile(bundle);

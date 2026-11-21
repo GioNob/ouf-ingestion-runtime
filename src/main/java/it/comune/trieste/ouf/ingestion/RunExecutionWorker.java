@@ -42,7 +42,8 @@ public final class RunExecutionWorker {
           var command=new CanonicalRecordPipeline.Command(claim.runId(),claim.partitionKey(),record.ordinal(),
               runs.nextAttemptNumber(claim,record.sourceObjectId()),adapter.adapterId(),bundle,record,
               context.correlationId(),position,watermark,claim);
-          var outcome=adapter instanceof GatewayJsonAdapter ? SchemaSurveillanceService.Outcome.MATCH :
+          boolean pageSchemaChecked=adapter instanceof GatewayJsonAdapter && record.provenance().containsKey("schemaVersion");
+          var outcome=pageSchemaChecked ? SchemaSurveillanceService.Outcome.MATCH :
               schemas.observe(claim.runId(),bundle,record,context.correlationId()).outcome();
           var result=outcome.blocking()?pipeline.reject(command,"ING_SCHEMA_"+outcome.name()):pipeline.process(command);
           if(result.succeeded()) continue;
@@ -76,11 +77,11 @@ public final class RunExecutionWorker {
   private AdapterSpi.RecordCursor open(AdapterSpi adapter,ExecutionBundle bundle,RunExecutionRepository.Claim claim,String correlation) {
     var checkpoint=new AdapterSpi.Checkpoint(claim.checkpoint());
     if(adapter instanceof GatewayJsonAdapter rest) {
-      return rest.open(bundle,checkpoint,(schema,position)->{
+      return rest.open(bundle,checkpoint,gate.hasOpen(claim.runId()),(schema,position)->{
         if(!gate.admits(claim,bundle,schema,position,correlation)) throw new ObservationOnly();
       });
     }
-    if(adapter instanceof GatewayWfsAdapter wfs && bundle.configuration().containsKey("publishedBundle")) {
+    if(adapter instanceof GatewayWfsAdapter wfs && PullSchema.declaresVerticalContract(bundle)) {
       if(!gate.admits(claim,bundle,wfs.observe(bundle),checkpoint.value(),correlation)) throw new ObservationOnly();
     } else if(gate.hasOpen(claim.runId())) {
       var missing=com.fasterxml.jackson.databind.node.MissingNode.getInstance();
