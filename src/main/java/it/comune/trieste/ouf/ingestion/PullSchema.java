@@ -9,7 +9,7 @@ final class PullSchema {
   private static final ObjectMapper JSON = new ObjectMapper()
       .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
   private static final Set<String> TYPES = Set.of("string","integer","decimal","boolean","date","datetime","geometry");
-  record Comparison(ObjectNode expected, ObjectNode observed, List<String> differences) {
+  record Comparison(ObjectNode expected, ObjectNode observed, List<String> differences, ObjectNode declaration) {
     boolean matches() { return differences.isEmpty(); }
   }
 
@@ -50,8 +50,11 @@ final class PullSchema {
     if (pinnedHash.isEmpty() && api.isMissingNode()) pinnedHash = fingerprint(pinnedFields);
     if (pinnedHash.matches("[0-9a-f]{64}")) pinnedHash = "sha256:" + pinnedHash;
     expected.put("fieldsSha256", pinnedHash);
-    expected.set("fields", pinnedFields.isArray() ? descriptors(pinnedFields) :
-        unit.has("columns") ? descriptors(unit.path("columns")) : config.path("expectedFieldNames"));
+    // An inline declaration may belong to an older publication than the API profile's pinned digest.
+    boolean verifiedInline = pinnedFields.isArray() && !pinnedHash.isEmpty() && pinnedHash.equals(fingerprint(pinnedFields));
+    JsonNode columns = unit.path("columns");
+    expected.set("fields", verifiedInline ? descriptors(pinnedFields) :
+        columns.isArray() && !columns.isEmpty() ? descriptors(columns) : config.path("expectedFieldNames"));
     JsonNode keys = unit.path("keys").path("declared");
     expected.set("key", keys.isArray() ? keys.path(0) :
         approved.has("key") ? approved.get("key") : config.path("identityFields"));
@@ -86,7 +89,14 @@ final class PullSchema {
     boolean geometryDeclared=actualGeometry.isNull() || (text(actualGeometry.path("field")) &&
         text(actualGeometry.path("type")) && text(actualGeometry.path("crs")));
     if (!geometryDeclared || !expected.path("geometry").equals(observed.path("geometry"))) differences.add("GEOMETRY");
-    return new Comparison(expected, observed, List.copyOf(differences));
+    ObjectNode evidence = JSON.createObjectNode();
+    evidence.set("schemaVersion", declaration.path("schemaVersion"));
+    evidence.set("fieldsSha256", observed.get("fieldsSha256"));
+    if (!observed.path("fieldsSha256").asText().isEmpty()) evidence.set("fields", fields);
+    if (declaration.has("collection")) evidence.set("collection", declaration.get("collection"));
+    if (declaration.path("key").isArray()) evidence.set("key", declaration.get("key"));
+    if (geometryDeclared) evidence.set("geometry", actualGeometry);
+    return new Comparison(expected, observed, List.copyOf(differences), evidence);
   }
 
   static String fingerprint(JsonNode fields) {

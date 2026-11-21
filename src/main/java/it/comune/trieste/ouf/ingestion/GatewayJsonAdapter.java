@@ -121,7 +121,7 @@ public final class GatewayJsonAdapter implements AdapterSpi {
             || initialPosition.containsKey("mode") && !Objects.equals(initialPosition.get("mode"),page.path("mode").textValue())) {
           var differences=new ArrayList<>(schema.differences());
           differences.add("CHECKPOINT_SCOPE_CHANGED");
-          schema=new PullSchema.Comparison(schema.expected(),schema.observed(),List.copyOf(differences));
+          schema=new PullSchema.Comparison(schema.expected(),schema.observed(),List.copyOf(differences),schema.declaration());
         }
         gate.check(schema,pages==1 ? initialPosition : position());
       }

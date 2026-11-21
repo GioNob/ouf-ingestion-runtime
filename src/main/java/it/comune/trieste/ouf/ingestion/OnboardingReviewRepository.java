@@ -13,7 +13,7 @@ public class OnboardingReviewRepository {
 
   @Transactional
   public Optional<Claim> claim(String worker,Duration lease,boolean schemaOnly) {
-    // A lost POST response permits only a read. A reclaimed worker cannot send another POST.
+    // A reclaimed reservation must reconcile its own transition before replay.
     sql.sql("""
         update ouf_ingestion.onboarding_review_outbox set state='FAILED_TERMINAL',
           last_error_code='ING_REVIEW_BUDGET_EXHAUSTED',lease_owner=null,lease_until=null
@@ -23,21 +23,23 @@ public class OnboardingReviewRepository {
         """).param("schema",schemaOnly).update();
     return sql.sql("""
         with candidate as (
-          select request_id,post_reserved from ouf_ingestion.onboarding_review_outbox
+          select request_id,post_reserved from ouf_ingestion.onboarding_review_outbox q
           where (not :schema or report_json is not null)
             and state in ('READY','FAILED_RETRYABLE','DELIVERING') and next_attempt_at<=clock_timestamp()
             and (lease_until is null or lease_until<=clock_timestamp()) and attempts<128
             and (first_attempt_at is null or first_attempt_at+interval '24 hours'>clock_timestamp()+interval '15 seconds')
-          order by next_attempt_at,created_at,request_id for update skip locked limit 1)
+            and not exists (select 1 from ouf_ingestion.onboarding_review_outbox earlier
+              where earlier.issue_id=q.issue_id and earlier.notice_sequence<q.notice_sequence and earlier.state<>'ACKED')
+          order by next_attempt_at,created_at,request_id for update of q skip locked limit 1)
         update ouf_ingestion.onboarding_review_outbox o set state='DELIVERING',attempts=attempts+1,
           post_reserved=true,first_attempt_at=coalesce(first_attempt_at,clock_timestamp()),lease_owner=:w,
           lease_until=least(clock_timestamp()+(:ms * interval '1 millisecond'),
             coalesce(first_attempt_at,clock_timestamp())+interval '24 hours')
         from candidate c,ouf_ingestion.runtime_issue i where o.request_id=c.request_id and i.issue_id=o.issue_id
-        returning o.request_id,o.issue_id,i.source_id,i.evidence_ref,o.correlation_id,o.idempotency_key,o.attempts,c.post_reserved
+        returning o.request_id,o.issue_id,i.source_id,i.evidence_ref,o.correlation_id,o.idempotency_key,o.attempts,c.post_reserved,o.notice_sequence is not null
         """).param("schema",schemaOnly).param("w",worker).param("ms",lease.toMillis())
         .query((r,n)->new Claim(r.getObject(1,UUID.class),r.getObject(2,UUID.class),r.getString(3),r.getString(4),
-            r.getString(5),r.getString(6),worker,r.getInt(7),r.getBoolean(8))).optional();
+            r.getString(5),r.getString(6),worker,r.getInt(7),r.getBoolean(8),r.getBoolean(9))).optional();
   }
   public void requireCurrent(Claim claim) {
     if(sql.sql("""
@@ -46,19 +48,31 @@ public class OnboardingReviewRepository {
         """).param("r",claim.requestId()).param("w",claim.worker()).param("n",claim.attempt())
         .query(Integer.class).optional().isEmpty()) throw new IllegalStateException("ING_ONBOARDING_REVIEW_LEASE_LOST");
   }
-  public String report(UUID issue) {
-    return sql.sql("select report_json::text from ouf_ingestion.onboarding_review_outbox where issue_id=:i and report_json is not null")
-        .param("i",issue).query(String.class).single();
+  public String report(UUID issue,String key) {
+    return sql.sql("""
+        select (coalesce(opening.report_json,'{}'::jsonb) || q.report_json)::text
+        from ouf_ingestion.onboarding_review_outbox q left join ouf_ingestion.onboarding_review_outbox opening
+          on q.notice_sequence>1 and opening.issue_id=q.issue_id and opening.notice_sequence=1
+        where q.issue_id=:i and q.idempotency_key=:k and q.report_json is not null
+        """).param("i",issue).param("k",key).query(String.class).single();
+  }
+
+  public Optional<String> ownerRef(UUID issue) {
+    return sql.sql("select onboarding_review_ref from ouf_ingestion.runtime_issue where issue_id=:i and onboarding_review_ref is not null")
+        .param("i",issue).query(String.class).optional();
   }
 
   @Transactional public void acknowledge(Claim c,String ref) {
     int changed=sql.sql("""
-        update ouf_ingestion.onboarding_review_outbox set state='ACKED',onboarding_review_ref=:ref,lease_owner=null,lease_until=null
+        update ouf_ingestion.onboarding_review_outbox set state='ACKED',onboarding_review_ref=:ref,last_error_code=null,lease_owner=null,lease_until=null
         where request_id=:r and state='DELIVERING' and lease_owner=:w and attempts=:n and lease_until>clock_timestamp()
         """).param("ref",ref).param("r",c.requestId()).param("w",c.worker()).param("n",c.attempt()).update();
     if(changed!=1) throw new IllegalStateException("ING_ONBOARDING_REVIEW_LEASE_LOST");
-    sql.sql("update ouf_ingestion.runtime_issue set onboarding_review_ref=:ref,lock_version=lock_version+1 where issue_id=:i")
-        .param("ref",ref).param("i",c.issueId()).update();
+    if (sql.sql("""
+        update ouf_ingestion.runtime_issue set onboarding_review_ref=:ref,lock_version=lock_version+1
+        where issue_id=:i and (not :notice or onboarding_review_ref is null or onboarding_review_ref=:ref)
+        """).param("ref",ref).param("i",c.issueId()).param("notice",c.schemaNotice()).update()!=1)
+      throw new IllegalStateException("ING_REVIEW_OWNER_ID_CHANGED");
   }
 
   @Transactional public void fail(Claim c,String code,boolean retry,Duration retryAfter) {
@@ -78,5 +92,5 @@ public class OnboardingReviewRepository {
         .param("r",c.requestId()).param("w",c.worker()).param("n",c.attempt()).update();
   }
   public record Claim(UUID requestId,UUID issueId,String sourceId,String evidenceRef,String correlationId,
-                      String idempotencyKey,String worker,int attempt,boolean reconcile){}
+                      String idempotencyKey,String worker,int attempt,boolean reconcile,boolean schemaNotice){}
 }

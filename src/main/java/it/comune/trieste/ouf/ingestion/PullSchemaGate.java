@@ -11,7 +11,11 @@ public class PullSchemaGate {
   private final JdbcClient db;
   private final ObjectMapper json;
   private final RunExecutionRepository runs;
-  public PullSchemaGate(JdbcClient db,ObjectMapper json,RunExecutionRepository runs) {
+  private final int noticeInterval;
+  public PullSchemaGate(JdbcClient db,ObjectMapper json,RunExecutionRepository runs,
+      @org.springframework.beans.factory.annotation.Value("${ouf.ingestion.schema-notice.update-min-seconds:0}") int noticeInterval) {
+    if (noticeInterval < 0) throw new IllegalArgumentException("ING_SCHEMA_NOTICE_INTERVAL_INVALID");
+    this.noticeInterval=noticeInterval;
     this.db=db; this.json=json; this.runs=runs;
   }
 
@@ -54,6 +58,15 @@ public class PullSchemaGate {
         || (open.getFirst().get("collection") instanceof String collection && !collection.equals(schema.observed().path("collection").asText()))))
       differences.add("CHECKPOINT_SCOPE_CHANGED");
     if(differences.isEmpty()) {
+      if (!schema.expected().path("fields").isObject()) {
+        db.sql("""
+            insert into ouf_ingestion.pull_verified_fields as v(tenant_id,source_id,fields_sha256,fields)
+            values(:t,:s,:hash,cast(:fields as jsonb))
+            on conflict(tenant_id,source_id) do update set fields_sha256=excluded.fields_sha256,fields=excluded.fields
+            where v.fields_sha256<>excluded.fields_sha256
+            """).param("t",tenant).param("s",source).param("hash",schema.observed().path("fieldsSha256").asText())
+            .param("fields",schema.observed().path("fields").toString()).update();
+      }
       if(issue!=null) {
         boolean pending=db.sql("""
             select exists(select 1 from ouf_ingestion.handoff_outbox h join ouf_ingestion.runtime_issue i using(run_id)
@@ -67,8 +80,15 @@ public class PullSchemaGate {
           runs.pause(claim,"ING_SCHEMA_AWAITING_PREFIX_ACK");
           return false;
         }
-        db.sql("update ouf_ingestion.pull_schema_incident set resume_run=:r where issue_id=:i")
-            .param("r",run).param("i",issue).update();
+        db.sql("""
+            update ouf_ingestion.pull_schema_incident g set resume_run=:r,
+              resume_reason=case when original.bundle_checksum<>:hash
+                and g.opening_approval <> (cast(:expected as jsonb) - 'fields' - 'schemaRef')
+                then 'REVISION_ACTIVATED' else 'SCHEMA_RETURNED' end
+            from ouf_ingestion.runtime_issue i join ouf_ingestion.ing_run original using(run_id)
+            where g.issue_id=:i and i.issue_id=g.issue_id
+            """).param("r",run).param("i",issue).param("hash",bundle.checksum())
+            .param("expected",schema.expected().toString()).update();
       }
       return true;
     }
@@ -81,26 +101,34 @@ public class PullSchemaGate {
           .param("ref","ingestion:schema-incident:"+issue).param("c",correlation).update();
       db.sql("""
           insert into ouf_ingestion.pull_schema_incident(issue_id,tenant_id,source_id,binding_ref,expected_schema,observed_schema,
-            differences,frozen_checkpoint,last_poll)
-          values(:i,:t,:s,:b,cast(:e as jsonb),cast(:o as jsonb),cast(:d as jsonb),cast(:p as jsonb),:r)
+            differences,frozen_checkpoint,last_poll,notice_interval_seconds,opening_approval)
+          values(:i,:t,:s,:b,cast(:e as jsonb),cast(:o as jsonb),cast(:d as jsonb),cast(:p as jsonb),:r,:interval,cast(:e as jsonb) - 'fields' - 'schemaRef')
           """).param("i",issue).param("t",tenant).param("s",source).param("b",position.getOrDefault("bindingRef",bundle.bindingRef()))
           .param("e",schema.expected().toString()).param("o",schema.observed().toString())
-          .param("d",encode(differences)).param("p",encode(position)).param("r",run).update();
-      var report=json.createObjectNode();
-      report.put("observedSchemaRef","ingestion:schema-incident:"+issue);
-      report.put("observedFingerprint",schema.observed().path("fieldsSha256").asText("").isEmpty() ?
-          "UNKNOWN" : schema.observed().path("fieldsSha256").asText());
-      report.put("previousFingerprint",schema.expected().path("fieldsSha256").asText());
-      report.put("classification","BREAKING");
-      var detail=report.putObject("detail");
-      detail.put("tenant",tenant).put("sourceId",source).put("incidentId",issue.toString()).put("idempotencyKey","ingestion-schema:"+issue);
-      detail.set("expectedVersion",schema.expected().get("version"));
-      detail.set("observedVersion",schema.observed().get("version"));
-      detail.set("differences",json.valueToTree(differences));
+          .param("d",encode(differences)).param("p",encode(position)).param("r",run).param("interval",noticeInterval).update();
+      var approvedFields=schema.expected().path("fields");
+      if (!approvedFields.isObject()) {
+        var verified=db.sql("""
+            select fields::text from ouf_ingestion.pull_verified_fields
+            where tenant_id=:t and source_id=:s and fields_sha256=:hash
+            """).param("t",tenant).param("s",source).param("hash",schema.expected().path("fieldsSha256").asText())
+            .query(String.class).optional();
+        if (verified.isPresent()) {
+          try { approvedFields=json.readTree(verified.get()); }
+          catch (java.io.IOException e) { throw new IllegalStateException("ING_SCHEMA_EVIDENCE_INVALID",e); }
+        }
+      }
+      var report=SchemaNotice.opening(tenant,source,issue,schema,approvedFields);
+      boolean ready=SchemaNotice.deliverable(report);
       db.sql("""
-          insert into ouf_ingestion.onboarding_review_outbox(request_id,issue_id,idempotency_key,correlation_id,report_json)
-          values(:id,:i,:key,:c,cast(:report as jsonb))
-          """).param("id",UUID.randomUUID()).param("i",issue).param("key","ingestion-schema:"+issue).param("report",report.toString()).param("c",correlation).update();
+          insert into ouf_ingestion.onboarding_review_outbox(request_id,issue_id,idempotency_key,correlation_id,
+            notice_sequence,report_json,state,last_error_code)
+          select :id,:i,:key,:c,1,cast(:report as jsonb) || jsonb_build_object(
+            'observationPolls',observation_polls,'observedAt',date_trunc('milliseconds',last_observed_at)),
+            :state,:error from ouf_ingestion.pull_schema_incident where issue_id=:i
+          """).param("id",UUID.randomUUID()).param("i",issue).param("key","schema-notice:"+issue+":1")
+          .param("report",report.toString()).param("c",correlation).param("state",ready?"READY":"FAILED_TERMINAL")
+          .param("error",ready?null:"ING_SCHEMA_NOTICE_EVIDENCE_INCOMPLETE").update();
     } else {
       db.sql("""
           update ouf_ingestion.pull_schema_incident set expected_schema=cast(:e as jsonb),observed_schema=cast(:o as jsonb),

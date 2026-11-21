@@ -14,11 +14,21 @@ public class OnboardingReviewDispatcher {
     var claim=queue.claim(worker,Duration.ofMinutes(2),schemaOnly);
     if(claim.isEmpty()) return Optional.empty();
     var c=claim.get();
+    boolean posted=false;
     try {
-      queue.requireCurrent(c);
-      var receipt=c.reconcile() ? onboarding.reconcile(c.issueId(),c.sourceId(),c.idempotencyKey())
-          .orElseThrow(()->new IllegalStateException("ING_REVIEW_RECONCILIATION_REQUIRED"))
-          : onboarding.request(c.issueId(),c.sourceId(),c.evidenceRef(),c.correlationId(),c.idempotencyKey());
+      Optional<RuntimePorts.OnboardingReviewPort.Receipt> found=Optional.empty();
+      if(c.reconcile()) {
+        queue.requireCurrent(c);
+        found=onboarding.reconcile(c.issueId(),c.sourceId(),c.idempotencyKey());
+        if(found.isEmpty() && !c.schemaNotice()) throw new IllegalStateException("ING_REVIEW_RECONCILIATION_REQUIRED");
+      }
+      RuntimePorts.OnboardingReviewPort.Receipt receipt;
+      if (found.isPresent()) receipt=found.get();
+      else {
+        queue.requireCurrent(c); // Recheck the remaining lease and budget after a GET.
+        posted=true;
+        receipt=onboarding.request(c.issueId(),c.sourceId(),c.evidenceRef(),c.correlationId(),c.idempotencyKey());
+      }
       if(!receipt.durable() || receipt.reviewRef()==null || receipt.reviewRef().isBlank())
         throw new IllegalStateException("ING_REVIEW_RECEIPT_INVALID");
       queue.acknowledge(c,receipt.reviewRef());
@@ -26,7 +36,7 @@ public class OnboardingReviewDispatcher {
       var reason=RunCoordinator.classify(failure);
       // Even an invalid POST receipt can represent a durable effect. Reconcile it once.
       boolean retry=reason.errorClass()==AdapterSpi.ErrorClass.TRANSIENT_SOURCE ||
-          (!c.reconcile() && "ING_REVIEW_RECEIPT_INVALID".equals(reason.code()));
+          (posted && "ING_REVIEW_RECEIPT_INVALID".equals(reason.code()));
       queue.fail(c,reason.code(),retry,reason.retryAfter());
     }
     return Optional.of(c.requestId());

@@ -1,7 +1,11 @@
 package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import static org.mockito.Mockito.*;
 import java.time.*;
 import java.util.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -151,7 +155,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(strings={"added","removed","type"})
-  void schemaIncidentSurvivesWorkersAndResumesFromConfirmedCursor(String drift) {
+  void schemaIncidentSurvivesWorkersAndResumesFromConfirmedCursor(String drift) throws Exception {
     String source="drift-"+UUID.randomUUID();
     var approved=publishedVertical(source,"1",BASE_FIELDS);
     var changed=switch(drift){
@@ -163,7 +167,9 @@ import org.springframework.transaction.PlatformTransactionManager;
     runVertical(first,new GatewayJsonAdapter(verticalGateway("1",BASE_FIELDS,"before"),json),"before");
     ackAndComplete(first,"before");
 
-    for(int poll=0;poll<2;poll++){
+    // A slow dispatcher sees two pending updates; later polls advance the newest one.
+    int pollCount="added".equals(drift)?5:"removed".equals(drift)?4:3;
+    for(int poll=0;poll<pollCount;poll++){
       UUID blocked=scheduledPoll(approved,poll+1);
       String checkpoint=checkpoint(blocked);
       assertThat(checkpoint).contains("after-before");
@@ -179,24 +185,16 @@ import org.springframework.transaction.PlatformTransactionManager;
       assertThat(sql.sql("select count(*) from ouf_ingestion.processing_attempt where run_id=:r").param("r",blocked).query(Long.class).single()).isZero();
       assertThat(sql.sql("select observation_polls from ouf_ingestion.pull_schema_notice where source_id=:s and tenant_id='tenant-1' and next_action='REVISE_ONBOARDING'")
           .param("s",source).query(Long.class).single()).isEqualTo(poll+1L);
-    }
-    assertThat(sql.sql("select count(*) from ouf_ingestion.onboarding_review_outbox q join ouf_ingestion.runtime_issue i using(issue_id) where i.source_id=:s")
-        .param("s",source).query(Long.class).single()).isOne();
-    if("added".equals(drift)) {
-      var reservation=reviews.claim("lost-reply",Duration.ofMinutes(1),true).orElseThrow();
-      assertThat(reservation.reconcile()).isFalse();
-      sql.sql("update ouf_ingestion.onboarding_review_outbox set lease_until=clock_timestamp()-interval '1 second' where request_id=:r")
-          .param("r",reservation.requestId()).update();
-      RuntimePorts.OnboardingReviewPort remote=new RuntimePorts.OnboardingReviewPort(){
-        public Receipt request(UUID id,String s,String e,String c,String k){throw new AssertionError("Second POST");}
-        public Optional<Receipt> reconcile(UUID id,String s,String key){
-          assertThat(key).isEqualTo(reservation.idempotencyKey());
-          return Optional.of(new Receipt("onboarding:existing-review",true));
-        }
-      };
-      assertThat(new OnboardingReviewDispatcher(reviews,remote).dispatchOne("restart",true)).contains(reservation.requestId());
-      assertThatThrownBy(()->reviews.acknowledge(reservation,"stale")).hasMessage("ING_ONBOARDING_REVIEW_LEASE_LOST");
-      assertThat(sql.sql("select state from ouf_ingestion.onboarding_review_outbox where request_id=:r").param("r",reservation.requestId()).query(String.class).single()).isEqualTo("ACKED");
+      if ("removed".equals(drift)) {
+        // Model a nonzero interval around the third observation without a wall-clock sleep.
+        if (poll==1 || poll==2) sql.sql("""
+            update ouf_ingestion.pull_schema_incident set notice_interval_seconds=:seconds where source_id=:s
+            """).param("seconds",poll==1?3600:0).param("s",source).update();
+        if (poll==2) assertThat(sql.sql("""
+            select count(*) from ouf_ingestion.onboarding_review_outbox q join ouf_ingestion.runtime_issue i using(issue_id)
+            where i.source_id=:s
+            """).param("s",source).query(Long.class).single()).isEqualTo(2);
+      }
     }
     var independent=externalBundle("other-"+UUID.randomUUID(),"REST_JSON");
     UUID other=start(independent,"independent","2000-01-01T00:00:00Z");
@@ -205,7 +203,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
     boolean republish="type".equals(drift);
     var next=republish?publishedVertical(source,"1",changed,2):approved;
-    UUID resumed=scheduledPoll(next,3);
+    UUID resumed=scheduledPoll(next,pollCount+1);
     assertThat(checkpoint(resumed)).contains("after-before");
     RuntimePorts.GatewaySourcePort recovered=verticalGateway("1",republish?changed:BASE_FIELDS,"first-suspended");
     runVertical(resumed,new GatewayJsonAdapter((ref,params,c)->{
@@ -216,9 +214,100 @@ import org.springframework.transaction.PlatformTransactionManager;
         .param("r",resumed).query(String.class).single()).isEqualTo("first-suspended");
     assertThat(sql.sql("select i.status from ouf_ingestion.pull_schema_incident g join ouf_ingestion.runtime_issue i using(issue_id) where g.resume_run=:r and g.resumed_at is not null")
         .param("r",resumed).query(String.class).single()).isEqualTo("RESOLVED");
+    verifyNoticeDeliveries(source,drift,changed,republish,pollCount);
     ackAndComplete(resumed,"resumed");
     sql.sql("update ouf_ingestion.ing_schedule set state='DISABLED' where source_id=:s").param("s",source).update();
   }
+  private void verifyNoticeDeliveries(String source,String drift,List<Map<String,Object>> fields,boolean republish,long pollCount) throws Exception {
+    var reservation=reviews.claim("before-crash",Duration.ofMinutes(1),true).orElseThrow();
+    assertThat(reservation.reconcile()).isFalse();
+    assertThat(reviews.claim("concurrent",Duration.ofMinutes(1),true)).isEmpty();
+    sql.sql("update ouf_ingestion.onboarding_review_outbox set lease_until=now() where request_id=:r")
+        .param("r",reservation.requestId()).update();
+
+    String path="/api/onboarding/v1/sources/"+source+"/schema-surveillance";
+    UUID issue=reservation.issueId(), ownerId=UUID.randomUUID();
+    String incidentKey="ingestion:tenant-1:"+source+":"+issue;
+    var gateway=mock(ExecutionGatewayClient.class);
+    var dispatcher=new OnboardingReviewDispatcher(reviews,new SchemaReviewGatewayPort(gateway,json,reviews));
+    var sent=new ArrayList<JsonNode>();
+    var posted=new LinkedHashMap<String,JsonNode>();
+    var reads=new java.util.concurrent.atomic.AtomicInteger();
+    ObjectNode receipt=json.createObjectNode();
+    when(gateway.exchange(eq(path),isNull(),eq(1048576),eq(200),eq(issue.toString()),isNull()))
+        .thenAnswer(call->{
+          // Simulate one stale empty GET after an OPEN reached the owner.
+          boolean stale="removed".equals(drift) && reads.incrementAndGet()==2;
+          return json.writeValueAsBytes(receipt.isEmpty() || stale?List.of():List.of(receipt));
+        });
+    var contract=JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012)
+        .getSchema(getClass().getResourceAsStream("/onboarding-schema-surveillance.json"));
+    when(gateway.exchange(eq(path),any(JsonNode.class),eq(65536),eq(201),anyString(),anyString())).thenAnswer(call->{
+      JsonNode body=call.getArgument(1);
+      assertThat(contract.validate(body)).isEmpty();
+      assertThat(body.path("incidentKey").asText()).isEqualTo(incidentKey);
+      assertThat(body.path("frozenCheckpointRef").asText()).isEqualTo("ingestion:schema-incident:"+issue+":frozen-checkpoint");
+      assertThat(body.path("expectedSchemaRef").asText()).isEqualTo("schema:places:1");
+      assertThat(body.path("observedSchema").path("fields")).isEqualTo(json.valueToTree(fields));
+      String digest=PullSchema.fingerprint(json.valueToTree(fields));
+      assertThat(body.path("observedSchema").path("fieldsSha256").asText()).isEqualTo(digest);
+      var difference=switch(drift) {
+        case "added" -> Map.of("field","new","change","ADDED");
+        case "removed" -> Map.of("field","id","change","REMOVED");
+        default -> Map.of("field","id","change","TYPE_CHANGED");
+      };
+      assertThat(body.path("differences")).isEqualTo(json.valueToTree(List.of(difference)));
+      var previous=posted.putIfAbsent(call.getArgument(5,String.class),body);
+      if (previous!=null) {
+        assertThat(body).isEqualTo(previous);
+        assertThat(body.path("state").asText()).isEqualTo("OPEN");
+        return json.writeValueAsBytes(receipt);
+      }
+      sent.add(body);
+      String transition=body.path("state").asText();
+      receipt.put("source_id",source).put("issue_id",ownerId.toString()).put("incident_key",incidentKey)
+          .put("observed_fingerprint",digest).put("observed_schema_ref","onboarding:schema-observation:"+ownerId)
+          .put("state",transition.equals("RESOLVED")?"RESOLVED":"OPEN")
+          .set("observation_polls",body.path("observationPolls"));
+      receipt.set("last_observed_at",body.path("observedAt"));
+      if (transition.equals("RESOLVED")) receipt.set("resolution_reason",body.path("reason"));
+      if (transition.equals("OPEN")) throw new RuntimePorts.GatewayFailure("ING_EXECUTION_IO_FAILED",
+          AdapterSpi.ErrorClass.TRANSIENT_SOURCE,Duration.ofHours(3));
+      return json.writeValueAsBytes(receipt);
+    });
+
+    // OPEN was reserved but never sent. GET finds nothing, POST succeeds remotely and its reply is lost.
+    assertThat(dispatcher.dispatchOne("restart",true)).contains(reservation.requestId());
+    assertThat(receipt.path("issue_id").asText()).isEqualTo(ownerId.toString());
+    assertThatThrownBy(()->reviews.acknowledge(reservation,"stale")).hasMessage("ING_ONBOARDING_REVIEW_LEASE_LOST");
+    assertThat(dispatcher.dispatchOne("during-backoff",true)).isEmpty();
+    assertThat(sql.sql("""
+        select attempts=2 and state='FAILED_RETRYABLE' and next_attempt_at>=first_attempt_at+interval '3 hours'
+        from ouf_ingestion.onboarding_review_outbox where request_id=:r
+        """).param("r",reservation.requestId()).query(Boolean.class).single()).isTrue();
+    sql.sql("""
+        update ouf_ingestion.onboarding_review_outbox set first_attempt_at=first_attempt_at-interval '3 hours',
+          next_attempt_at=now() where request_id=:r
+        """).param("r",reservation.requestId()).update();
+    assertThat(dispatcher.dispatchOne("after-timeout",true)).contains(reservation.requestId());
+    assertThat(sent).hasSize(1);
+    verify(gateway,times("removed".equals(drift)?2:1))
+        .exchange(eq(path),any(JsonNode.class),eq(65536),eq(201),anyString(),eq(reservation.idempotencyKey()));
+    // A receipt already exists for this incident, but does not prove the reserved UPDATE was applied.
+    var update=reviews.claim("before-update",Duration.ofMinutes(1),true).orElseThrow();
+    sql.sql("update ouf_ingestion.onboarding_review_outbox set lease_until=now() where request_id=:r")
+        .param("r",update.requestId()).update();
+    assertThat(dispatcher.dispatchOne("restart",true)).contains(update.requestId());
+    assertThat(dispatcher.dispatchOne("next-poll",true)).isPresent();
+    assertThat(dispatcher.dispatchOne("resumed",true)).isPresent();
+    assertThat(dispatcher.dispatchOne("done",true)).isEmpty();
+    assertThat(sent.stream().map(n->n.path("state").asText()).toList()).containsExactly("OPEN","UPDATE","UPDATE","RESOLVED");
+    assertThat(sent.stream().map(n->n.path("observationPolls").asLong()).toList()).containsExactly(1L,2L,pollCount,pollCount);
+    assertThat(sent.getLast().path("reason").asText()).isEqualTo(republish?"REVISION_ACTIVATED":"SCHEMA_RETURNED");
+    assertThat(sql.sql("select onboarding_review_ref from ouf_ingestion.runtime_issue where issue_id=:i")
+        .param("i",issue).query(String.class).single()).isEqualTo("onboarding:schema-surveillance:"+ownerId);
+  }
+
   private UUID scheduledPoll(ExecutionBundle bundle,int slot){
     // Make this fixture's slot due without waiting for four wall-clock intervals.
     sql.sql("""

@@ -19,6 +19,38 @@ class PullSchemaTest {
           {"nullable":false,"name":"id","type":"string"}],"key":["id"],"geometry":null}
         """);
   }
+  @Test void noticeRetainsCompleteDescriptorsAndEveryFieldChange() throws Exception {
+    var approved=declaration();
+    approved.withArray("fields").addObject().put("name","gone").put("type","string").put("nullable",true);
+    var changed=approved.deepCopy();
+    changed.withArray("fields").remove(2);
+    changed.withArray("fields").addObject().put("name","shape").put("type","geometry").put("nullable",true);
+    ((ObjectNode)changed.path("fields").get(0)).put("nullable",true).put("type","integer").put("unit","metres");
+    changed.putArray("key").add("name");
+    changed.putObject("geometry").put("field","shape").put("type","Point").put("crs","EPSG:4326");
+    var bundle=rest(Map.of("sourceSchemaRef","schema:places:1","sourceSchema",approved));
+    var comparison=PullSchema.compare(bundle,changed,changed);
+    var opening=SchemaNotice.opening("tenant","places",UUID.randomUUID(),comparison,comparison.expected().path("fields"));
+    assertThat(SchemaNotice.deliverable(opening)).isTrue();
+    assertThat(opening.at("/observedSchema/fields")).isEqualTo(changed.get("fields"));
+    assertThat(opening.at("/observedSchema/fieldsSha256").asText()).isEqualTo(PullSchema.fingerprint(changed.get("fields")));
+    var differences=new ArrayList<String>();
+    opening.path("differences").forEach(d->differences.add(d.path("field").asText()+" "+d.path("change").asText()));
+    assertThat(differences).containsExactlyInAnyOrder("gone REMOVED","name NULLABILITY_CHANGED","name TYPE_CHANGED",
+        "shape ADDED","id KEY_CHANGED","name KEY_CHANGED","shape GEOMETRY_CHANGED");
+  }
+
+  @Test void versionOnlyDriftHasNoInventedFieldDifference() throws Exception {
+    var original=declaration();
+    var bundle=rest(Map.of("sourceSchemaRef","schema:places:1","sourceSchema",original));
+    var changed=original.deepCopy().put("schemaVersion","2");
+    var comparison=PullSchema.compare(bundle,changed,changed);
+    assertThat(comparison.differences()).containsExactly("VERSION");
+    var opening=SchemaNotice.opening("tenant","places",UUID.randomUUID(),comparison,comparison.expected().path("fields"));
+    assertThat(opening.path("differences").size()).isZero();
+    assertThat(SchemaNotice.deliverable(opening)).isFalse();
+  }
+
   private ExecutionBundle rest(Map<String,Object> extra) {
     var config=new HashMap<String,Object>(Map.of("sourceSchemaVersion","1","identityFields",List.of("id")));
     config.putAll(extra);
