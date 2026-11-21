@@ -17,6 +17,13 @@ public class ExecutionRuntimeConfiguration {
     };
   }
   @Bean CanonicalRecordPipeline executionPipeline(ObjectMapper json,FrozenContractValidator contracts,DurablePipelineRepository durable,QuarantineService quarantine,ExecutionGatewayClient gateway){return new CanonicalRecordPipeline(json,contracts,durable,quarantine,gateway);}
-  @Bean RunExecutionWorker executionWorker(RunExecutionRepository runs,RuntimePorts.AdapterResolver adapters,CanonicalRecordPipeline pipeline,SchemaSurveillanceService schemas,RunStateRepository health){return new RunExecutionWorker(runs,adapters,pipeline,schemas,health);}
+  @Bean RunExecutionWorker executionWorker(RunExecutionRepository runs,RuntimePorts.AdapterResolver adapters,CanonicalRecordPipeline pipeline,SchemaSurveillanceService schemas,RunStateRepository health,
+      org.springframework.beans.factory.ObjectProvider<PublicationGatewayClient> publications){
+    return new RunExecutionWorker(runs,adapters,pipeline,schemas,health,snapshot->{
+      var gateway=publications.getIfAvailable();
+      if(gateway==null)throw new IllegalStateException("ING_PUBLICATION_VERIFIER_REQUIRED");
+      gateway.verifyForRetry(snapshot);
+    });
+  }
   @Bean OutboxDispatcher executionDispatcher(DurablePipelineRepository repository,ExecutionGatewayClient gateway,IngestionMetrics metrics){return new OutboxDispatcher(repository,gateway,metrics);}
 }

@@ -36,12 +36,12 @@ public final class CanonicalRecordPipeline {
   public Result process(Command c){
     UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID();String rawRef=sourceRef(c.record());
     try{
-      Config cfg=configuration(c.bundle());Instant acquired=clock.instant();String observed=observedAt(c.record(),cfg,acquired);
+      Config cfg=configuration(c.bundle());Instant acquired=c.claim()==null?clock.instant():durable.acquiredAt(c.claim(),c.sequenceNo(),clock.instant());String observed=observedAt(c.record(),cfg,acquired);
       byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);
       RuntimePorts.DataLakePort.Receipt rawReceipt=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"raw");rawRef=rawReceipt.objectRef();
       RecordMetadata metadata=metadata(c.record());Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?map(c.record().payload(),cfg.mappings()):Map.of();
       Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
-      contracts.validate(ENVELOPE,envelope);byte[] normalized=bytes(envelope);String normalizedHash=hash(normalized);
+      contracts.validate(ENVELOPE,envelope);byte[] normalized=c.claim()==null?bytes(envelope):stableBytes(envelope);String normalizedHash=hash(normalized);
       persist(RuntimePorts.DataLakePort.Zone.NORMALIZED,c,normalized,normalizedHash,"normalized");
       Map<String,Object> candidate=Collections.unmodifiableMap(new LinkedHashMap<>(mapped));Map<String,Object> curatedValue=metadata.operation()==Operation.UPSERT?candidate:tombstoneEvidence(c,metadata);
       byte[] curated=bytes(curatedValue);String outputHash=hash(curated);
@@ -53,7 +53,7 @@ public final class CanonicalRecordPipeline {
       durable.stage(new DurablePipelineRepository.StageCommand(c.runId(),c.partitionKey(),c.sequenceNo(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),bundleRef(c.bundle()),idempotency(c,"handoff"),payload,evidence,c.restartCheckpoint(),c.candidateWatermark(),c.claim()),attempt,lineage,handoff);
       return new Result(attempt,lineage,handoff,null);
     }catch(RuntimeException failure){
-      if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED").contains(failure.getMessage()))throw failure;
+      if(controlFailure(failure))throw failure;
       String code=safeCode(failure);UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);
       boolean blocking=!nonBlocking(c.bundle(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"contract-or-mapping:"+code,c.correlationId(),blocking);
       return new Result(failed,null,null,quarantineId,blocking);
@@ -63,7 +63,7 @@ public final class CanonicalRecordPipeline {
   public Result reject(Command c,String reasonCode){
     durable.requireRecoveryBudget(c.runId(),c.claim());
     String code=reasonCode!=null&&reasonCode.matches("ING_[A-Z0-9_]{1,76}")?reasonCode:"ING_PROCESSING_REJECTED";String rawRef=sourceRef(c.record());
-    try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){if(Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED").contains(ignored.getMessage()))throw ignored;}
+    try{byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);rawRef=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"rejected-raw").objectRef();}catch(RuntimeException ignored){if(controlFailure(ignored))throw ignored;}
     durable.requireRecoveryBudget(c.runId(),c.claim());
     UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId,true);
   }
@@ -75,7 +75,40 @@ public final class CanonicalRecordPipeline {
   private Map<String,Object> lineage(Command c,Config cfg,RecordMetadata metadata,UUID attempt,UUID lineage,UUID handoff,String rawRef,String rawHash,String normalizedHash,String outputHash,String observed,Instant acquired,Map<String,Object> refs){Map<String,Object> source=linked("sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"sourceObservedAt",observed);put(source,"sourceRevision",metadata.sourceRevision());return linked("lineageId",lineage.toString(),"ingestionRunId",c.runId().toString(),"ingestionId",idempotency(c,"ingestion"),"handoffId",handoff.toString(),"source",source,"contracts",refs,"processing",linked("pipelineVersion","1.1.0","transformationIds",cfg.mappings().stream().map(Mapping::transform).distinct().toList(),"processingAttemptId",attempt.toString()),"data",linked("rawObjectRef",rawRef,"rawHash",rawHash,"normalizedHash",normalizedHash,"outputHash",outputHash),"times",linked("acquiredAt",acquired.toString(),"processedAt",acquired.toString()),"trace",linked("correlationId",c.correlationId()),"outcome",linked("status","SUCCESS","issueRefs",List.of()));}
   private Map<String,Object> handoff(Command c,Config cfg,RecordMetadata metadata,UUID lineage,UUID handoff,String rawRef,String outputHash,String observed,Instant acquired,Map<String,Object> refs,Map<String,Object> candidate){Map<String,Object> identity=linked("sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"observedAt",observed);put(identity,"sourceRevision",metadata.sourceRevision());put(identity,"validFrom",metadata.validFrom());put(identity,"validTo",metadata.validTo());Map<String,Object> payload=linked("handoffId",handoff.toString(),"ingestionRunId",c.runId().toString(),"ingestionId",idempotency(c,"ingestion"),"sourceIdentity",identity,"operation",metadata.operation().name(),"rawObjectRef",rawRef,"contractRefs",refs,"lineageId",lineage.toString(),"contentHash",outputHash,"occurredAt",observed,"acquiredAt",acquired.toString(),"changeRepresentation",changeRepresentation(cfg.changeProfile(),metadata,metadata.operation()==Operation.UPSERT?outputHash:null),"correlationId",c.correlationId());if(metadata.operation()==Operation.UPSERT)payload.put("canonicalPayload",candidate);if(!cfg.dataAccessLabels().isEmpty())payload.put("dataAccessLabels",cfg.dataAccessLabels());return payload;}
   private Map<String,Object> contractRefs(ExecutionBundle b,Config cfg){Map<String,Object> m=linked("sourceSchemaRef",cfg.sourceSchemaRef(),"bundleRef",bundleRef(b),"semanticPublicationSetRef",cfg.semanticPublicationSetRef(),"adapterProfileRef",cfg.adapterProfileRef());if(!cfg.mappingRefs().isEmpty())m.put("mappingRefs",cfg.mappingRefs());if(!cfg.relationshipResolutionStrategyRefs().isEmpty())m.put("relationshipResolutionStrategyRefs",cfg.relationshipResolutionStrategyRefs());put(m,"authorityPolicyRef",cfg.authorityPolicyRef());return m;}
-  private RuntimePorts.DataLakePort.Receipt persist(RuntimePorts.DataLakePort.Zone zone,Command c,byte[] content,String hash,String suffix){durable.requireRecoveryBudget(c.runId(),c.claim());var r=lake.persist(zone,c.runId(),c.record().sourceObjectId(),content,hash,idempotency(c,suffix));durable.requireRecoveryBudget(c.runId(),c.claim());if(!r.durable())throw failure("ING_DATALAKE_NOT_DURABLE");return r;}
+  private static boolean controlFailure(RuntimeException e){
+    return e instanceof RuntimePorts.GatewayFailure || e instanceof AdapterSpi.AdapterException
+      || Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED","ING_LAKE_RECONCILE_REQUIRED").contains(String.valueOf(e.getMessage()));
+  }
+
+  private RuntimePorts.DataLakePort.Receipt persist(RuntimePorts.DataLakePort.Zone zone,Command c,byte[] content,String hash,String suffix){
+    durable.requireRecoveryBudget(c.runId(),c.claim());
+    if(c.claim()!=null){
+      var known=durable.beginLakeWrite(c,suffix,hash);
+      if(known.isPresent())return new RuntimePorts.DataLakePort.Receipt(known.get(),true);
+    }
+    RuntimePorts.DataLakePort.Receipt receipt;
+    try {
+      receipt=lake.persist(zone,c.runId(),c.record().sourceObjectId(),content,hash,idempotency(c,suffix));
+    } catch(RuntimeException failure) {
+      // A refusal has no receipt. Timeout, malformed success, or process death
+      // leaves the intent in place so another worker cannot resend blindly.
+      String code=RunCoordinator.classify(failure).code();
+      if(c.claim()!=null && code.matches("ING_(EXECUTION_)?GATEWAY_(400|401|403|404|422|429|503)")){
+        durable.finishLakeWrite(c,suffix,hash,null);
+      }else if(c.claim()!=null){
+        throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+      }
+      throw failure;
+    }
+    durable.requireRecoveryBudget(c.runId(),c.claim());
+    if(!receipt.durable())throw failure(c.claim()==null?"ING_DATALAKE_NOT_DURABLE":"ING_LAKE_RECONCILE_REQUIRED");
+    if(c.claim()!=null)durable.finishLakeWrite(c,suffix,hash,receipt.objectRef());
+    return receipt;
+  }
+  private byte[] stableBytes(Object value){
+    try{return json.writer().with(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsBytes(value);}
+    catch(JsonProcessingException e){throw failure("ING_JSON_INVALID");}
+  }
   private byte[] bytes(Object value){try{return json.writeValueAsBytes(value);}catch(JsonProcessingException e){throw failure("ING_JSON_INVALID");}}
   private static String hash(byte[] value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));}catch(Exception e){throw new IllegalStateException("ING_HASH_UNAVAILABLE",e);}}
   private static String idempotency(Command c,String suffix){return c.runId()+":"+c.partitionKey()+":"+c.sequenceNo()+":"+suffix;}

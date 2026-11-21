@@ -55,11 +55,26 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
       String credential=Files.readString(token).strip();if(credential.isEmpty()||credential.length()>16384||credential.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
       var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(10)).header("Authorization","Bearer "+credential).header("X-Correlation-ID",UUID.randomUUID().toString());
       if(body==null)builder.GET();else {byte[] encoded=json.writeValueAsBytes(body);if(encoded.length>10_485_760)throw new IllegalArgumentException("ING_EXECUTION_REQUEST_TOO_LARGE");builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(encoded));}
-      var pending=http.sendAsync(builder.build(),info->new BoundedBody(limit));HttpResponse<byte[]> response;
-      try{response=pending.get(12,TimeUnit.SECONDS);}catch(TimeoutException|ExecutionException e){pending.cancel(true);throw failure("ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(InterruptedException cancelled){pending.cancel(true);throw cancelled;}
-      if(response.statusCode()!=expected)throw failure("ING_EXECUTION_GATEWAY_"+response.statusCode(),response.statusCode()==401||response.statusCode()==403?AdapterSpi.ErrorClass.AUTH_ROUTE:response.statusCode()>=500||response.statusCode()==429?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
+      var pending=http.sendAsync(builder.build(),info->info.statusCode()==expected?new BoundedBody(limit):HttpResponse.BodySubscribers.replacing(new byte[0]));HttpResponse<byte[]> response;
+      try{response=pending.get(12,TimeUnit.SECONDS);}
+      catch(TimeoutException|ExecutionException e){
+        pending.cancel(true);
+        if(e.getCause() instanceof IOException io && "ING_RESPONSE_LIMIT".equals(io.getMessage()))
+          throw failure("ING_RESPONSE_LIMIT",AdapterSpi.ErrorClass.CONFIGURATION);
+        if("/api/internal/v1/lake/objects".equals(path))throw failure("ING_LAKE_RECONCILE_REQUIRED",AdapterSpi.ErrorClass.CONFIGURATION);
+        throw failure("ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+      }catch(InterruptedException cancelled){pending.cancel(true);throw cancelled;}
+      int status=response.statusCode();
+      if(status!=expected){
+        boolean lake="/api/internal/v1/lake/objects".equals(path);
+        if(lake && status>=500 && status!=503)throw failure("ING_LAKE_RECONCILE_REQUIRED",AdapterSpi.ErrorClass.CONFIGURATION);
+        boolean retry=status==429 || status==502 || status==503 || status==504 ||
+          (status==202 && "/api/internal/v1/handoffs".equals(path));
+        var type=retry?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:status==401||status==403?AdapterSpi.ErrorClass.AUTH_ROUTE:AdapterSpi.ErrorClass.CONFIGURATION;
+        throw new RuntimePorts.GatewayFailure("ING_EXECUTION_GATEWAY_"+status,type,retry?RetryPolicy.retryAfter(response.headers()):null);
+      }
       return response.body();
-    }catch(InterruptedException e){Thread.currentThread().interrupt();throw failure("ING_EXECUTION_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(IOException e){throw failure("ING_EXECUTION_IO_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}
+    }catch(InterruptedException e){Thread.currentThread().interrupt();throw failure("ING_EXECUTION_INTERRUPTED",AdapterSpi.ErrorClass.CONFIGURATION);}catch(IOException e){throw failure("ING_EXECUTION_IO_FAILED",AdapterSpi.ErrorClass.CONFIGURATION);}
   }
   @SuppressWarnings("unchecked") private Map<String,Object> decode(byte[] value){try{return json.readValue(value,Map.class);}catch(IOException e){throw new IllegalArgumentException("ING_EXECUTION_RECEIPT_INVALID");}}
   static String hash(byte[] content){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));}catch(Exception e){throw new IllegalStateException("ING_HASH_FAILED",e);}}

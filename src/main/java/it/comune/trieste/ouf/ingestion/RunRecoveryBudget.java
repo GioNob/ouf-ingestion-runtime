@@ -66,6 +66,9 @@ final class RunRecoveryBudget {
     boolean owned=sql.sql("select exists(select 1 from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where p.run_id=:r and p.partition_key=:p and p.lease_owner=:w and p.lease_generation=:g and p.lease_until>clock_timestamp() and p.state='RUNNING' and r.state='RUNNING')")
       .param("r",claim.runId()).param("p",claim.partitionKey()).param("w",claim.worker()).param("g",claim.generation()).query(Boolean.class).single();
     if(!owned)throw new IllegalStateException("ING_PARTITION_LEASE_LOST");
+    if(sql.sql("select exists(select 1 from ouf_ingestion.ing_partition where run_id=:r and partition_key=:p and retry_started_at+interval '24 hours'<=clock_timestamp())")
+        .param("r",claim.runId()).param("p",claim.partitionKey()).query(Boolean.class).single())
+      throw new IllegalStateException("ING_RECOVERY_BUDGET_EXHAUSTED");
     var states=sql.sql("select state='ACTIVE' and deadline_at>clock_timestamp() valid from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1").param("r",claim.runId()).query(Boolean.class).list();
     if(!states.isEmpty()&&!states.getFirst())throw new IllegalStateException("ING_RECOVERY_BUDGET_EXHAUSTED");
   }

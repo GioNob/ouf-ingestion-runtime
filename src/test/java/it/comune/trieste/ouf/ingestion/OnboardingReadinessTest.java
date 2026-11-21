@@ -44,6 +44,46 @@ class OnboardingReadinessTest {
     assertThatThrownBy(()->service.verify("source",version,hash,()->{})).hasMessage("ING_COMPAT_CANCELLED");
     verifyNoInteractions(objects);verify(gateway,never()).attestCompatibility(anyString(),any(),anyString(),anyLong());
   }
+  @Test void invalidCsvReturnsSafe422AndTheNextFrozenCsvPasses()throws Exception{
+    var http=MockMvcBuilders.standaloneSetup(new OnboardingReadinessApi(service,"tenant-a")).build();
+    var invalid=new FrozenConfigurationProbeTest().candidate();
+    var badConfig=PublishedActivation.map(invalid,"configuration");
+    var runtime=PublishedActivation.map(PublishedActivation.map(badConfig,"extractionProfile"),"runtime");
+    byte[] duplicate="id;name\r\n1;First\r\n1;Second\r\n".getBytes(StandardCharsets.UTF_8);
+    PublishedActivation.map(runtime,"execution").put("expectedSize",duplicate.length);
+    runtime.put("contentHash",ExecutionGatewayClient.hash(duplicate));
+    String badHash=FrozenConfigurationProbe.configurationHash(json,badConfig);
+    UUID badVersion=UUID.fromString((String)invalid.get("onboardingVersionId"));
+    when(gateway.frozenConfiguration("source",badVersion,badHash)).thenReturn(Map.of("source_id","source",
+      "onboarding_version_id",badVersion.toString(),"configuration_hash",badHash,"configuration",badConfig,"state","APPROVED","version",1));
+    when(gateway.compatibility("source",badVersion,badHash)).thenReturn(Map.of("status","ABSENT"));
+    when(objects.read(anyString(),anyLong(),eq(ExecutionGatewayClient.hash(duplicate)))).thenReturn(duplicate);
+    http.perform(authorized(badVersion,badHash)).andExpect(status().is(422))
+      .andExpect(jsonPath("$.code").value("ING_MANAGED_DUPLICATE_IDENTITY"));
+    verify(gateway,never()).attestCompatibility(anyString(),any(),anyString(),anyLong());
+
+    frozen();when(gateway.compatibility("source",version,hash)).thenReturn(Map.of("status","ABSENT"));
+    byte[] valid="\ufeffid;name\r\n1;Town Hall\r\n2;Library\r\n".getBytes(StandardCharsets.UTF_8);
+    when(objects.read(anyString(),anyLong(),eq(ExecutionGatewayClient.hash(valid)))).thenReturn(valid);
+    when(gateway.attestCompatibility("source",version,hash,2)).thenReturn(attestation());
+    http.perform(authorized(version,hash)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PASS"));
+  }
+
+  @Test void contractErrorExposesOnlyTheOwnerCode()throws Exception{
+    var mocked=mock(OnboardingReadinessService.class);
+    when(mocked.verify(eq("source"),eq(version),eq(hash),any())).thenThrow(
+      new FrozenContractValidator.ContractViolation("ING_CONTRACT_INVALID",List.of("private-field")));
+    var http=MockMvcBuilders.standaloneSetup(new OnboardingReadinessApi(mocked,"tenant-a")).build();
+    http.perform(authorized(version,hash)).andExpect(status().is(422))
+      .andExpect(jsonPath("$.code").value("ING_CONTRACT_INVALID")).andExpect(jsonPath("$.paths").doesNotExist());
+  }
+
+  private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder authorized(UUID id,String digest)throws Exception{
+    return post("/api/trusted-human/v1/ingestion/onboarding-readiness").contentType("application/json")
+      .content(json.writeValueAsString(Map.of("sourceId","source","onboardingVersionId",id,"configurationHash",digest)))
+      .with(request->{TestAuthorization.bind(request,"operator","HUMAN",Set.of("ouf.onboarding.configuration.write"));return request;});
+  }
+
   @Test void humanAndResourcePolicyAreRequiredBeforeAnyWork()throws Exception{
     var mocked=mock(OnboardingReadinessService.class);
     var http=MockMvcBuilders.standaloneSetup(new OnboardingReadinessApi(mocked,"tenant-a")).setControllerAdvice(new OwnerAuthorizationErrors()).build();
