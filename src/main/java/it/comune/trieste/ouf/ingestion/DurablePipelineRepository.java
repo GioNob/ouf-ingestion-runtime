@@ -22,6 +22,9 @@ public class DurablePipelineRepository {
   @Transactional
   public UUID stage(StageCommand c,UUID attempt,UUID lineage,UUID handoff){
     requireRecoveryBudget(c.runId(),c.claim());if(c.claim()!=null) requireLease(c);
+    sql.sql("select pg_advisory_xact_lock(hashtextextended(source_id,0)) from ouf_ingestion.ing_run where run_id=:r")
+        .param("r",c.runId()).query().singleRow();
+    requireConsumption(c.runId());
     String encodedPayload=encode(c.payload);sql.sql("select pg_advisory_xact_lock(hashtextextended(:i,0))").param("i",c.idempotencyKey).query().singleRow();
     if(c.claim()!=null) requireLease(c); // Recheck after any idempotency-lock wait.
     List<Map<String,Object>> existing=sql.sql("select handoff_id,payload_json=cast(:p as jsonb) payload_matches from ouf_ingestion.handoff_outbox where idempotency_key=:i").param("p",encodedPayload).param("i",c.idempotencyKey).query().listOfRows();
@@ -92,8 +95,21 @@ public class DurablePipelineRepository {
 
   public void requireRecoveryBudget(RunExecutionRepository.Claim claim){RunRecoveryBudget.requireCurrent(sql,claim);}
   public void requireRecoveryBudget(UUID run,RunExecutionRepository.Claim claim){
+    requireConsumption(run);
     if(claim==null){boolean recovering=sql.sql("select exists(select 1 from ouf_ingestion.run_recovery_session where run_id=:r)").param("r",run).query(Boolean.class).single();if(recovering)throw new IllegalStateException("ING_RECOVERY_CLAIM_REQUIRED");}
     else{if(!run.equals(claim.runId()))throw new IllegalStateException("ING_PARTITION_LEASE_LOST");RunRecoveryBudget.requireCurrent(sql,claim);}
+  }
+
+  private void requireConsumption(UUID run) {
+    boolean blocked=sql.sql("""
+        select exists(select 1 from ouf_ingestion.ing_run r
+          left join ouf_ingestion.pull_schema_incident g on g.tenant_id=r.tenant_id and g.source_id=r.source_id and g.resumed_at is null
+          left join ouf_ingestion.ing_schedule s on s.schedule_id=r.schedule_id
+          where r.run_id=:r and ((g.issue_id is not null and g.resume_run is distinct from r.run_id)
+            or (r.phase<>'MANAGED_ONCE' and r.schedule_id is not null and (s.state<>'ACTIVE' or not s.publication_enabled
+              or s.publication_checksum<>r.bundle_checksum or s.discovery_verified_at<=clock_timestamp()-interval '5 minutes'))))
+        """).param("r",run).query(Boolean.class).single();
+    if(blocked)throw new IllegalStateException("ING_SCHEMA_CONSUMPTION_FENCED");
   }
 
   private void requireLease(StageCommand c){
