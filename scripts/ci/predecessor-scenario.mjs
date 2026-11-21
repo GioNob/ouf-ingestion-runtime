@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { property, source, startFixture } from './predecessor-fixture.mjs';
@@ -35,7 +35,7 @@ async function waitFor(label, condition) {
 
 async function start(role, restart = false) {
   running = name + '-' + role;
-  const image = await read(role + '.id');
+  const image = await read((role === 'next' ? 'new' : role) + '.id');
   if (restart) {
     await docker('start', running);
   } else {
@@ -44,7 +44,9 @@ async function start(role, restart = false) {
       '-e', `OUF_ING_DB_URL=jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}`,
       '-e', 'OUF_ING_DB_USER=' + PGUSER, '-e', 'OUF_ING_DB_PASSWORD=' + PGPASSWORD, image,
       '--server.address=127.0.0.1', '--server.port=18133', '--spring.flyway.enabled=true',
-      '--spring.flyway.ignore-migration-patterns=*:future', ...fixture.args);
+      '--spring.flyway.ignore-migration-patterns=*:future',
+      ...(role === 'next' ? ['--spring.flyway.locations=classpath:db/migration,filesystem:/fixture/next-migration'] : []),
+      ...fixture.args);
   }
   assert.equal(await docker('inspect', '-f', '{{.Image}}', running), image);
   await waitFor(`Readiness of ${role}${restart ? ' after return' : ''}`, async () => {
@@ -56,15 +58,23 @@ async function start(role, restart = false) {
     }
     if (response.status === 503) return false;
     assert.equal(response.status, 200);
-    return (await response.json()).status === 'UP';
+    const health = await response.json();
+    if (health.status !== 'UP') return false;
+    if (role === 'new') {
+      const details = health.components.ingestionReadiness.details;
+      assert.equal(details.schemaCompatibility, restart ? 'FUTURE_MIGRATIONS_PRESENT' : 'EXACT');
+      assert.equal(details.futureMigrations, restart ? 1 : 0);
+    }
+    return true;
   });
 }
 
-async function history(role) {
+async function history(role, extraScripts = []) {
   const rows = JSON.parse(await sql(`select json_agg(h order by installed_rank) from flyway_schema_history h`));
   assert.ok(rows.every(row => row.success), 'failed migration');
   const scripts = rows.filter(row => row.type === 'SQL').map(row => row.script).sort();
-  assert.deepEqual(scripts, (await read(role + '.migrations')).split('\n'), role + ' migration history');
+  const expected = (await read(role + '.migrations')).split('\n').concat(extraScripts).sort();
+  assert.deepEqual(scripts, expected, role + ' migration history');
   console.log(`${role} schema V${rows.at(-1).version}, ${scripts.length} SQL migrations`);
   return rows;
 }
@@ -147,6 +157,23 @@ try {
   assert.equal(await sql(`select (select count(*) from ing_run), (select count(*) from ing_partition),
                                 (select count(*) from handoff_outbox)`), '3|3|3');
   console.log('PASS: three managed runs, predecessor reads, same candidate handoff retried and acknowledged.');
+
+  await docker('stop', '-t', '35', running);
+  const nextVersion = upgradedHistory.at(-1).version + '.1';
+  assert.match(nextVersion, /^\d+(?:\.\d+)+$/);
+  const probe = 'V' + nextVersion + '__ci_predecessor_return_probe.sql';
+  await mkdir(fixtureDir + '/next-migration');
+  await writeFile(fixtureDir + '/next-migration/' + probe,
+    'CREATE TABLE ouf_ingestion.ci_predecessor_return_probe (id integer PRIMARY KEY);\n');
+  await start('next');
+  const nextHistory = await history('new', [probe]);
+  assert.deepEqual(nextHistory.slice(0, -1), upgradedHistory, 'synthetic release changed the candidate prefix');
+  assert.equal(nextHistory.at(-1).version, nextVersion);
+  assert.equal(await sql("select to_regclass('ouf_ingestion.ci_predecessor_return_probe') is not null"), 't');
+  await docker('stop', '-t', '35', running);
+  await start('new', true);
+  assert.deepEqual(await history('new', [probe]), nextHistory, 'history changed after candidate restart');
+  console.log('PASS: candidate ready after next-release migration (FUTURE_MIGRATIONS_PRESENT, 1).');
 } catch (error) {
   // Keep failure evidence to schema versions, states and owner error codes.
   for (const query of [

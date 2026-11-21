@@ -11,7 +11,7 @@ candidate=$(git rev-parse --verify 'HEAD^{commit}')
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/ingestion-return.XXXXXXXX")
 name=$(basename "$scratch")
 cleanup() {
-  docker rm -f "$name-old" "$name-new" >/dev/null 2>&1 || true
+  docker rm -f "$name-old" "$name-new" "$name-next" >/dev/null 2>&1 || true
   rm -rf -- "$scratch"
 }
 trap cleanup EXIT
