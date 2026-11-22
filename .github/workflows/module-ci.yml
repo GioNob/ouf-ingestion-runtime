@@ -61,7 +61,9 @@ jobs:
           repository: GioNob/ouf-source-onboarding
           ref: main
           path: .pairwise/onboarding
-          sparse-checkout: contracts
+          sparse-checkout: |
+            contracts
+            src/main/java/it/comune/trieste/ouf/onboarding/application
           persist-credentials: false
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}

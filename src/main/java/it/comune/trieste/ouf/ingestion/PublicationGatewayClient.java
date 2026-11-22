@@ -65,7 +65,8 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   var pins=ValuePins.embedded(bindings);
   if(published.get("semanticMapping") instanceof Map<?,?> mapping
       && (mapping.containsKey("compositions") || mapping.get("propertyMappings") instanceof List<?> properties
-          && properties.stream().anyMatch(p -> p instanceof Map<?,?> field && "VALUE_MAP_V1".equals(field.get("transform")))))
+          && properties.stream().anyMatch(p -> p instanceof Map<?,?> field
+              && (field.containsKey("transformParams") || "VALUE_MAP_V1".equals(field.get("transform"))))))
     new ConfiguredValueMapping(PublishedExecutionMapper.map(bundle).configuration(),pins);
  }
  public Map<String,Object> frozenConfiguration(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/ingestion-configuration?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}

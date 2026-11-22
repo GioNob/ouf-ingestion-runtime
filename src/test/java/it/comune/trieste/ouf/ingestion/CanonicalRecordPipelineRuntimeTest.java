@@ -120,6 +120,8 @@ import org.springframework.test.context.*;
     assertThat(json.readTree(lake.raw)).isEqualTo(json.valueToTree(cells));
     var evidence=json.readTree(sql.sql("select evidence_json::text from ouf_ingestion.ing_lineage where lineage_id=:id")
         .param("id",result.lineageId()).query(String.class).single());
+    var normalized=json.readTree(lake.normalized);
+    assertThat(normalized.path("sourceDataRef").asText()).isEqualTo(handoff.get("rawObjectRef"));
     assertThat(evidence.at("/data/rawObjectRef").asText()).isEqualTo(handoff.get("rawObjectRef"));
     assertThat(evidence.at("/data/rawHash").asText()).isEqualTo(ExecutionGatewayClient.hash(lake.raw));
     assertThat(evidence.at("/processing/transformationIds").toString()).contains("DATETIME_ISO_OFFSET_V1","LIST_SPLIT_V1","INTEGER_V1");
@@ -150,9 +152,10 @@ import org.springframework.test.context.*;
   private static String string(Map<String,Object> row,String key){return String.valueOf(row.get(key));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
   private static final class RecordingLake implements RuntimePorts.DataLakePort {
-    final List<Zone> zones=new ArrayList<>();byte[] raw;
+    final List<Zone> zones=new ArrayList<>();byte[] raw,normalized;
     public Receipt persist(Zone zone,UUID run,String object,byte[] content,String hash,String key){
       zones.add(zone);if(zone==Zone.RAW)raw=content.clone();
+      if(zone==Zone.NORMALIZED)normalized=content.clone();
       return new Receipt("lake:"+zone.name().toLowerCase()+":"+key,true);
     }
   }

@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.ingestion;
 
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.*;
 import java.math.BigDecimal;
 import java.util.*;
@@ -35,13 +36,16 @@ final class ValueGeometry {
       var geo = JSON.readValue(text, Map.class);
       validate(geo, 0);
       return wrap("EPSG:4326", geo);
-    } catch (Exception invalid) { throw new ConfiguredValueTransform.InvalidValue(row); }
+    } catch (JsonProcessingException | IllegalArgumentException invalid) {
+      throw new ConfiguredValueTransform.InvalidValue(row);
+    }
   }
 
   private static void validate(Map<?,?> geo, int depth) {
-    require(depth < 128 && geo.get("type") instanceof String);
+    require(depth < 128 && geo != null && geo.get("type") instanceof String);
     String type = (String) geo.get("type");
-    require(TYPES.contains(type) && !geo.containsKey("crs") && !geo.containsKey("features") && !geo.containsKey("geometry"));
+    require(TYPES.contains(type) && !geo.containsKey("crs") && !geo.containsKey("features")
+        && !geo.containsKey("geometry") && !geo.containsKey("properties"));
     boolean collection = type.equals("GeometryCollection");
     require(!geo.containsKey(collection ? "coordinates" : "geometries"));
     List<?> data = list(geo.get(collection ? "geometries" : "coordinates"));
@@ -50,7 +54,10 @@ final class ValueGeometry {
       require(bbox.size() >= 4 && bbox.size() % 2 == 0 && bbox.stream().allMatch(Number.class::isInstance));
     }
     if (collection) {
-      for (Object member : data) validate((Map<?,?>)member, depth + 1);
+      for (Object member : data) {
+        if (!(member instanceof Map<?,?> geometry)) throw new IllegalArgumentException();
+        validate(geometry, depth + 1);
+      }
     } else if (!data.isEmpty()) coordinates(type, data);
   }
   private static void coordinates(String type, List<?> data) {

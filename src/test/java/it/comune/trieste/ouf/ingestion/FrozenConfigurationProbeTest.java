@@ -92,6 +92,22 @@ class FrozenConfigurationProbeTest {
     assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
     assertThat(error.rowOrdinal()).isEqualTo(2);
   }
+  @Test void valueMapPinWithoutPublishedContentsFailsBeforeReadingAsset(){
+    var candidate=candidate();
+    var configuration=configuration(candidate);
+    var semantic=PublishedActivation.map(configuration,"semanticMapping");
+    String set=UUID.randomUUID().toString();
+    String ref="urn:map@"+set;
+    semantic.put("semanticRefs",List.of("urn:map@1"));
+    semantic.put("propertyMappings",List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name",
+        "transform","VALUE_MAP_V1","transformParams",Map.of("valueMapRef",ref))));
+    configuration.put("semanticReferenceBindings",List.of(Map.of("semanticId","urn:map","publicationSetId",set,
+        "semanticVersion","1","revisionId",UUID.randomUUID().toString(),"valueMapRef",ref,"vocabularyRef","urn:vocab")));
+    rehash(candidate);
+    var probe=new FrozenConfigurationProbe(json,objects(),refs->assertThat(refs).containsExactly("urn:map@1"));
+    assertThatThrownBy(()->probe.probe(candidate)).hasMessage("ING_VALUE_MAP_CONTENT_REQUIRED").hasNoCause();
+    assertThat(reads).isZero();
+  }
   private Map<String,Object> decimalProbe(String first,String second){
     byte[] asset=("id;name\r\n1;"+first+"\r\n2;"+second+"\r\n").getBytes(StandardCharsets.UTF_8);
     var c=candidate();

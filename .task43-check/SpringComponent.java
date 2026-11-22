@@ -1,1 +1,0 @@
-package org.springframework.stereotype; @interface Unused {}

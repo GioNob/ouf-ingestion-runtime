@@ -36,10 +36,11 @@ public final class CanonicalRecordPipeline {
   public Result process(Command c){
     UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID();String rawRef=sourceRef(c.record());
     try{
+      Config cfg=configuration(c.bundle());
       Instant acquired=c.claim()==null?clock.instant():durable.acquiredAt(c.claim(),c.sequenceNo(),clock.instant());
+      String observed=observedAt(c.record(),cfg,acquired);
       byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);
       RuntimePorts.DataLakePort.Receipt rawReceipt=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"raw");rawRef=rawReceipt.objectRef();
-      Config cfg=configuration(c.bundle());String observed=observedAt(c.record(),cfg,acquired);
       RecordMetadata metadata=metadata(c.record());Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?cfg.mapping().apply(c.record().payload(),c.record().ordinal()):Map.of();
       Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
       contracts.validate(ENVELOPE,envelope);byte[] normalized=c.claim()==null?bytes(envelope):stableBytes(envelope);String normalizedHash=hash(normalized);
@@ -72,6 +73,7 @@ public final class CanonicalRecordPipeline {
   }
 
   private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),optional(c,"authorityPolicyRef"),strings(c.get("mappingRefs")),strings(c.get("relationshipResolutionStrategyRefs")),labels(c.get("dataAccessLabels")),mapping(b),required(c,"observationPolicy"),changeProfile(c.get("changeRepresentationProfile")));}
+  void validateConfiguration(ExecutionBundle bundle) { configuration(bundle); }
   private record Compiled(ExecutionBundle bundle, ConfiguredValueMapping mapping) {}
   private volatile Compiled lastMapping;
   private ConfiguredValueMapping mapping(ExecutionBundle bundle) {

@@ -1,7 +1,10 @@
 package it.comune.trieste.ouf.ingestion;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -11,7 +14,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class DurablePipelineRepository {
   private final JdbcClient sql; private final ObjectMapper json;
-  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
+  private final ObjectReader handoffReader;
+  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){
+    this.sql=sql;this.json=json;
+    // GeoJSON coordinates stay JSON numbers and can exceed binary floating point precision.
+    handoffReader=json.readerFor(new TypeReference<Map<String,Object>>() {}).with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+  }
 
   /** Persists attempt, lineage, handoff and restart checkpoint in one short transaction. */
   @Transactional
@@ -215,7 +223,7 @@ public class DurablePipelineRepository {
   }
 
   private String encode(Object value){try{return json.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalArgumentException("ING_JSON_INVALID",e);}}
-  @SuppressWarnings("unchecked") private Map<String,Object> decode(String value){try{return json.readValue(value,Map.class);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
+  private Map<String,Object> decode(String value){try{return handoffReader.readValue(value);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
   public record ClaimedHandoff(UUID handoffId,Map<String,Object> payload,String idempotencyKey,int attempts){}
   public record StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark,RunExecutionRepository.Claim claim){
     public StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,sourceObjectId,attemptNo,adapterId,bundleVersion,bundleRef,idempotencyKey,payload,evidence,restartCheckpoint,candidateWatermark,null);}

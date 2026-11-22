@@ -76,8 +76,10 @@ class ConfiguredValueMappingTest {
         GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1,2]}",1));
     for (String w : List.of("POINT(1 2) trailing","POINT(1)","LINESTRING(1 2)","POLYGON ((0 0,1 0,1 1,0 1))","POINT M(1 2 3)"))
       bad(()->wkt.apply(w,1),"ING_TRANSFORM_VALUE_INVALID");
-    for (String g : List.of("{\"type\":\"Feature\"}","{\"type\":\"LineString\",\"coordinates\":[[1,2]]}",
-        "{\"type\":\"Point\",\"coordinates\":[1,true]}","{\"type\":\"Point\",\"coordinates\":[1,2]} {}"))
+    for (String g : List.of("null","{\"type\":\"Feature\"}","{\"type\":\"LineString\",\"coordinates\":[[1,2]]}",
+        "{\"type\":\"GeometryCollection\",\"geometries\":[null]}",
+        "{\"type\":\"Point\",\"coordinates\":[1,true]}","{\"type\":\"Point\",\"coordinates\":[1,2],\"properties\":{}}",
+        "{\"type\":\"Point\",\"coordinates\":[1,2]} {}"))
       bad(()->GEOJSON_V1.apply(g,1),"ING_TRANSFORM_VALUE_INVALID");
     bad(()->WKT_V1.bind(Map.of(),ValuePins.EMPTY),"ING_TRANSFORM_PARAMS_INVALID");
   }

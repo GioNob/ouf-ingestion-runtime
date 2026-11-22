@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -48,8 +49,28 @@ class OnboardingValueTransformContractTest {
   @Test
   @EnabledIfEnvironmentVariable(named = "OUF_ONBOARDING_CHECKOUT", matches = ".+")
   void contractEqualsOwnerDatatypes() throws IOException {
-    Path owner = Path.of(System.getenv("OUF_ONBOARDING_CHECKOUT"), "contracts/ouf-value-types-v1.json");
-    assertThat(Files.readAllBytes(owner)).isEqualTo(Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json")));
+    Path checkout = Path.of(System.getenv("OUF_ONBOARDING_CHECKOUT"));
+    Path owner = checkout.resolve("contracts/ouf-value-types-v1.json");
+    if (!Files.notExists(owner)) {
+      assertThat(Files.readAllBytes(owner)).isEqualTo(Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json")));
+      return;
+    }
+    // The owner can roll out D-084 after Ingestion. Keep checking the deployed vocabulary until then.
+    Path source = checkout.resolve("src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileExecutionProposal.java");
+    var declaration = Pattern.compile("\\bDATATYPES\\s*=\\s*Map\\.of\\s*\\(([^;]*)\\)\\s*;")
+        .matcher(Files.readString(source));
+    assertThat(declaration.find()).as("Legacy Onboarding DATATYPES initializer").isTrue();
+    String[] literals = declaration.group(1).strip().split("\\s*,\\s*", -1);
+    assertThat(literals.length % 2).isZero();
+    var legacy = new LinkedHashMap<String,String>();
+    for (int i = 0; i < literals.length; i += 2) {
+      assertThat(literals[i]).matches("\"[A-Za-z0-9_]+\"");
+      assertThat(literals[i + 1]).matches("\"[A-Za-z0-9_]+\"");
+      String rule = literals[i].substring(1, literals[i].length() - 1);
+      String datatype = literals[i + 1].substring(1, literals[i + 1].length() - 1);
+      assertThat(legacy.put(rule, XSD + datatype)).isNull();
+    }
+    assertThat(legacy).isEqualTo(contract());
   }
 
   @Test void sharedContractCoversRuntimeReaders() throws IOException {

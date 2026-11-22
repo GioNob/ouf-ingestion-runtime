@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.*;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -34,6 +35,20 @@ import org.springframework.test.context.*;
   @Test void equivalentStageIsIdempotentAndConflictingPayloadFailsClosed(){UUID run=run();String key="stable-"+run;var command=command(run,1,key,Map.of("row",1));UUID first=repository.stage(command);assertThat(repository.stage(command)).isEqualTo(first);assertThat(sql.sql("select count(*) from ouf_ingestion.handoff_outbox where idempotency_key=:i").param("i",key).query(Long.class).single()).isOne();assertThatThrownBy(()->repository.stage(command(run,1,key,Map.of("row",2)))).hasMessage("ING_IDEMPOTENCY_CONFLICT");}
 
   @Test void expiredDeliveringLeaseIsReclaimedAfterCrash(){UUID handoff=stage(run(),1);var lost=repository.claim("crashed",Duration.ofMinutes(1)).orElseThrow();assertThat(lost.handoffId()).isEqualTo(handoff);sql.sql("update ouf_ingestion.handoff_outbox set lease_until=transaction_timestamp()-interval '1 second' where handoff_id=:h").param("h",handoff).update();assertThat(repository.claim("recovery",Duration.ofMinutes(1)).orElseThrow().handoffId()).isEqualTo(handoff);}
+
+  @Test void geometryCoordinatesRemainExactOnOutboxRedelivery(){
+    UUID run=run();
+    var point=ValueGeometry.point(new BigDecimal("13.778765432109876543"),new BigDecimal("45.650123456789012345"));
+    var payload=Map.<String,Object>of("canonicalPayload",Map.of("urn:location",point));
+    UUID id=repository.stage(command(run,1,"geometry-"+run,payload));
+    var first=repository.claim("first",Duration.ofMinutes(1)).orElseThrow();
+    assertThat(first.handoffId()).isEqualTo(id);
+    assertThat(first.payload()).isEqualTo(payload);
+    repository.retry(id,"first","ING_DOWNSTREAM_UNAVAILABLE",Duration.ZERO,false);
+    var next=repository.claim("next",Duration.ofMinutes(1)).orElseThrow();
+    assertThat(next.handoffId()).isEqualTo(id);
+    assertThat(next.payload()).isEqualTo(payload);
+  }
 
   @Test void expiredOrSupersededExecutionCannotStageOrAdvanceCheckpoint(){
     UUID run=run();

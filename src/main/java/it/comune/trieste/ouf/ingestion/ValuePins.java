@@ -145,6 +145,7 @@ final class ValuePins {
       }
       if (constraints.containsKey("minInclusive") && constraints.containsKey("maxInclusive"))
         require(compare(type, string(constraints,"minInclusive"), string(constraints,"maxInclusive")) <= 0);
+      constraints = Map.copyOf(constraints);
     }
     boolean accepts(Object value, ValueMap producer, ValuePins pins) {
       if (constraints.containsKey("maxLength")) {

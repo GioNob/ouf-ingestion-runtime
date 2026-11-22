@@ -160,11 +160,7 @@ final class ConfiguredValueMapping {
       if (builder.containsKey("items")) {
         require(spec.many() && builder.size() == 1);
         var items = new ArrayList<Expression>();
-        for (Object item : list(builder.get("items"))) {
-          var single = new LinkedHashMap<>(object(item));
-          if (single.containsKey("component")) require(name.equals(single.remove("component")));
-          items.add(checked(single,spec,false));
-        }
+        for (Object item : list(builder.get("items"))) items.add(checked(object(item),spec,false));
         expression = new Expression(spec.type(),true,null,row -> {
           var values = new ArrayList<>();
           for (var item : items) {
