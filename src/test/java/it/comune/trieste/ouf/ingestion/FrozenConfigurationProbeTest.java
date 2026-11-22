@@ -56,6 +56,25 @@ class FrozenConfigurationProbeTest {
     var c=candidate();PublishedActivation.map(configuration(c),"semanticMapping").put("propertyMappings",List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name","transform","UPPERCASE")));rehash(c);
     assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_TRANSFORM_UNSUPPORTED");
   }
+  @Test void decimalDotInFrozenCsvPassesOnEveryRow(){
+    var proof=decimalProbe(" +00045.6500 ","");
+    assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L)
+        .containsEntry("attestationSubmitted",false);
+  }
+  @Test void invalidDecimalInFrozenCsvIdentifiesTheDataRow(){
+    var error=catchThrowableOfType(()->decimalProbe("45.6500","private-cell"),ConfiguredValueTransform.InvalidValue.class);
+    assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
+    assertThat(error.rowOrdinal()).isEqualTo(2);
+  }
+  private Map<String,Object> decimalProbe(String first,String second){
+    byte[] asset=("id;name\r\n1;"+first+"\r\n2;"+second+"\r\n").getBytes(StandardCharsets.UTF_8);
+    var c=candidate();
+    PublishedActivation.map(configuration(c),"semanticMapping").put("propertyMappings",
+        List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name","transform","DECIMAL_DOT_V1")));
+    execution(c).put("expectedSize",asset.length);
+    runtime(c).put("contentHash",ExecutionGatewayClient.hash(asset));rehash(c);
+    return new FrozenConfigurationProbe(json,(ref,size,hash)->asset,semantics()).probe(c);
+  }
   @Test void assetIntegrityFailurePropagatesWithoutPositiveProof(){
     RuntimePorts.ManagedObjectPort broken=(ref,size,hash)->{throw new IllegalArgumentException("ING_MANAGED_INTEGRITY_MISMATCH");};
     assertThatThrownBy(()->new FrozenConfigurationProbe(json,broken,semantics()).probe(candidate())).hasMessage("ING_MANAGED_INTEGRITY_MISMATCH");

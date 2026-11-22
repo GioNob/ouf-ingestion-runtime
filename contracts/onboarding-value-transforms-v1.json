@@ -1,0 +1,7 @@
+{
+  "IDENTITY": "http://www.w3.org/2001/XMLSchema#string",
+  "DECIMAL_DOT_V1": "http://www.w3.org/2001/XMLSchema#decimal",
+  "DECIMAL_COMMA_V1": "http://www.w3.org/2001/XMLSchema#decimal",
+  "DATE_ISO_V1": "http://www.w3.org/2001/XMLSchema#date",
+  "DATE_DMY_V1": "http://www.w3.org/2001/XMLSchema#date"
+}

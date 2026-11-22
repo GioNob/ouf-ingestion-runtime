@@ -78,6 +78,15 @@ class OnboardingReadinessTest {
       .andExpect(jsonPath("$.code").value("ING_CONTRACT_INVALID")).andExpect(jsonPath("$.paths").doesNotExist());
   }
 
+  @Test void typedDataFailureReturnsOnlyCodeAndRow()throws Exception{
+    var mocked=mock(OnboardingReadinessService.class);
+    when(mocked.verify(eq("source"),eq(version),eq(hash),any())).thenThrow(new ConfiguredValueTransform.InvalidValue(2));
+    var http=MockMvcBuilders.standaloneSetup(new OnboardingReadinessApi(mocked,"tenant-a")).build();
+    var response=http.perform(authorized(version,hash)).andExpect(status().is(422)).andReturn().getResponse();
+    assertThat(json.readTree(response.getContentAsString())).isEqualTo(json.readTree(
+        "{\"code\":\"ING_TRANSFORM_VALUE_INVALID\",\"rowOrdinal\":2}"));
+  }
+
   private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder authorized(UUID id,String digest)throws Exception{
     return post("/api/trusted-human/v1/ingestion/onboarding-readiness").contentType("application/json")
       .content(json.writeValueAsString(Map.of("sourceId","source","onboardingVersionId",id,"configurationHash",digest)))
