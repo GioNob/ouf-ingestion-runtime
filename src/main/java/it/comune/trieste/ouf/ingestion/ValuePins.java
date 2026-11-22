@@ -31,6 +31,22 @@ final class ValuePins {
     for (String ref : definitions.keySet()) checkClosure(ref, new HashSet<>(), new int[1]);
   }
 
+  static final class BindingFailure extends IllegalArgumentException {
+    static final String MISMATCH = "ING_SEMANTIC_REFERENCE_MISMATCH";
+    static final String UNRESOLVABLE = "ING_SEMANTIC_REFERENCE_UNRESOLVABLE";
+    final String itemCode;
+    final int index;
+    final String semanticId, revisionId;
+    BindingFailure(String runCode, String itemCode, int index, String semanticId, String revisionId) {
+      super(runCode);
+      this.itemCode = itemCode;
+      this.index = index;
+      this.semanticId = semanticId;
+      this.revisionId = revisionId;
+    }
+    Map<String,Object> detail() { return Map.of("code",itemCode,"index",index,"semanticId",semanticId,"revisionId",revisionId); }
+  }
+
   static ValuePins embedded(Object rawBindings) {
     if (!(rawBindings instanceof List<?> bindings)) throw error();
     if (bindings.stream().map(ValuePins::object)
@@ -42,54 +58,65 @@ final class ValuePins {
     var coordinates = new HashSet<String>();
     var vocabularies = new HashMap<String,String>();
     int valueMapBytes = 0;
-    for (Object raw : bindings) {
-      var pin = object(raw);
-      String id = string(pin,"semanticId");
-      String ref = id + "@" + publication(pin);
-      require(coordinates.add(ref));
-      unique.merge(id,ref,(first,second) -> "");
-      if (pin.containsKey("valueMapRef")) {
-        require(ref.equals(pin.get("valueMapRef")));
-        requireMapContent(pin);
-        var definition = object(pin.get("definition"));
-        byte[] canonical = canonicalBytes(definition);
-        if (canonical.length > MAX_VALUE_MAP_BUNDLE_BYTES - valueMapBytes)
-          throw new IllegalArgumentException("ING_VALUE_MAP_LIMIT_EXCEEDED");
-        valueMapBytes += canonical.length;
-        require(canonical.length <= MAX_VALUE_MAP_DEFINITION_BYTES
-            && digest(canonical).equals(pin.get("definitionSha256")));
-        maps.put(ref,mapContents(pin, definition));
-      } else if (pin.containsKey("definitionSha256")) {
-        require(absolute(id));
-        schemas.put(ref,components(checkedDefinition(pin)));
-      } else if (pin.containsKey("definition")) {
-        var definition = object(pin.get("definition"));
-        String vocabulary = string(definition,"vocabularyRef");
-        require(absolute(id) && absolute(vocabulary));
-        String previous = vocabularies.putIfAbsent(id,vocabulary);
-        require(previous == null || previous.equals(vocabulary));
-        members.computeIfAbsent(vocabulary, ignored -> new HashSet<>()).add(id);
+    for (int index=0;index<bindings.size();index++) {
+      var pin = object(bindings.get(index));
+      try {
+        String id = string(pin,"semanticId");
+        String ref = id + "@" + publication(pin);
+        require(coordinates.add(ref));
+        unique.merge(id,ref,(first,second) -> "");
+        if (pin.containsKey("valueMapRef")) {
+          require(ref.equals(pin.get("valueMapRef")));
+          requireMapContent(pin);
+          var definition = object(pin.get("definition"));
+          byte[] canonical = canonicalBytes(definition);
+          if (canonical.length > MAX_VALUE_MAP_BUNDLE_BYTES - valueMapBytes)
+            throw new IllegalArgumentException("ING_VALUE_MAP_LIMIT_EXCEEDED");
+          valueMapBytes += canonical.length;
+          require(canonical.length <= MAX_VALUE_MAP_DEFINITION_BYTES
+              && digest(canonical).equals(pin.get("definitionSha256")));
+          maps.put(ref,mapContents(pin, definition));
+        } else if (pin.containsKey("definitionSha256")) {
+          require(absolute(id));
+          schemas.put(ref,components(checkedDefinition(pin)));
+        } else if (pin.containsKey("definition")) {
+          var definition = object(pin.get("definition"));
+          String vocabulary = string(definition,"vocabularyRef");
+          require(absolute(id) && absolute(vocabulary));
+          String previous = vocabularies.putIfAbsent(id,vocabulary);
+          require(previous == null || previous.equals(vocabulary));
+          members.computeIfAbsent(vocabulary, ignored -> new HashSet<>()).add(id);
+        }
+      } catch (IllegalArgumentException invalid) {
+        if (pin.get("semanticId") instanceof String id && pin.get("revisionId") instanceof String revision)
+          throw new BindingFailure(invalid.getMessage(), "ING_VALUE_MAP_LIMIT_EXCEEDED".equals(invalid.getMessage()) ? invalid.getMessage() : BindingFailure.MISMATCH, index,id,revision);
+        throw invalid;
       }
     }
     return new ValuePins(schemas, maps, unique, members);
   }
 
   static void verifyBinding(Map<?,?> pin, Map<?,?> actual) {
+    verifyBinding(pin, actual, false);
+  }
+
+  static void verifyBinding(Map<?,?> pin, Map<?,?> actual, boolean compact) {
     Object kind = actual.get("artifact_type");
     if (pin.containsKey("valueMapRef") || "VALUE_MAP".equals(kind)) {
       requireMapContent(pin);
       require("VALUE_MAP".equals(kind) && pin.containsKey("valueMapRef"));
-      verifyDefinition(pin,actual);
+      verifyDefinition(pin,actual,compact);
     } else if ("DATATYPE".equals(kind)) {
-      verifyDefinition(pin,actual);
+      verifyDefinition(pin,actual,compact);
     } else if (pin.containsKey("definition") || pin.containsKey("definitionSha256")) {
       require("CONCEPT".equals(kind) && !pin.containsKey("definitionSha256")
           && object(pin.get("definition")).equals(actual.get("definition")));
     }
   }
 
-  private static void verifyDefinition(Map<?,?> pin, Map<?,?> actual) {
-    require(checkedDefinition(pin).equals(actual.get("definition"))
+  private static void verifyDefinition(Map<?,?> pin, Map<?,?> actual, boolean compact) {
+    var definition = checkedDefinition(pin);
+    require((compact || definition.equals(actual.get("definition")))
         && pin.get("definitionSha256").equals(actual.get("definitionSha256")));
   }
 

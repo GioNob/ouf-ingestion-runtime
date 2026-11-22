@@ -16,15 +16,14 @@ class FrozenConfigurationProbeTest {
     assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L).containsEntry("attestationSubmitted",false);
     assertThat(reads).isEqualTo(1);assertThat(semanticChecks).isEqualTo(1);
   }
-  @Test void nativeSemanticReferencesHaveTheSameBoundBeforeCompatibilityAttestation(){
-    for(int count:List.of(21,32,33)){
+  @Test void nativeSemanticReferencesBeyond32PassCompatibilityAttestation(){
+    for(int count:List.of(21,32,33,1024)){
       reads=0;semanticChecks=0;var c=candidate();var refs=new ArrayList<String>();
       for(int i=0;i<count;i++)refs.add("urn:native:"+i+"@1");
       PublishedActivation.map(configuration(c),"semanticMapping").put("semanticRefs",refs);rehash(c);
       RuntimePorts.SemanticPort exact=new RuntimePorts.SemanticPort(){public void preflight(Collection<String> actual){semanticChecks++;assertThat(actual).containsExactlyElementsOf(refs);}};
       var candidateProbe=new FrozenConfigurationProbe(json,objects(),exact);
-      if(count>32){assertThatThrownBy(()->candidateProbe.probe(c)).hasMessage("ING_PREFLIGHT_EXACT_REF_REQUIRED");assertThat(reads+semanticChecks).isZero();}
-      else{assertThat(candidateProbe.probe(c)).containsEntry("semanticBindingCount",count).containsEntry("validatedRows",2L);assertThat(reads).isOne();assertThat(semanticChecks).isOne();}
+      assertThat(candidateProbe.probe(c)).containsEntry("semanticBindingCount",count).containsEntry("validatedRows",2L);assertThat(reads).isOne();assertThat(semanticChecks).isOne();
     }
   }
   @Test void tamperedFrozenConfigurationFailsBeforeNetwork(){

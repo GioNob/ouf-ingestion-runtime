@@ -59,7 +59,7 @@ class ManagedRepeatabilityRuntimeTest {
   };
 
   @BeforeEach void isolateSchedulers(){
-    // The owner claim selects globally. Roll back all fixture state after each case.
+    // Claims select globally. The committed scale case uses the same disposable CI database.
     db.sql("truncate ouf_ingestion.ing_schedule,ouf_ingestion.ing_run cascade").update();
   }
 
@@ -348,6 +348,176 @@ class ManagedRepeatabilityRuntimeTest {
   }
 
   @TempDir Path directory;
+
+  @Test @DisplayName("ING-51B2-ATOMIC")
+  void oneUnresolvablePinBlocksAdmissionBeforeAnyLakeOrHandoffEffect() throws Exception {
+    try(var peer=new SemanticGatewayFixture(directory)){
+      var pins=SemanticGatewayFixture.pins(1024);
+      var envelope=PublishedActivationTest.envelope(source,true,1);
+      var published=PublishedActivation.map(envelope,"bundle");
+      published.put("semanticReferenceBindings",pins);
+      published.put("semanticRefs",SemanticGatewayFixture.refs(pins));
+      PublishedActivationTest.hash(published);
+      envelope.put("checksum",published.get("checksum"));
+      peer.server.createContext("/api/onboarding/v1/runtime/publications/",e->{try(e){peer.reply(e,200,envelope);}});
+      var client=peer.client(Map.of("reference-batch-items","512"));
+      current=client.decode(envelope);
+      activation.reconcile(current);
+      peer.revoked=SemanticGatewayFixture.id(700);
+      var writes=new AtomicInteger();
+      lake=(zone,run,object,content,hash,key)->{
+        writes.incrementAndGet();return new RuntimePorts.DataLakePort.Receipt("lake:"+key,true);
+      };
+      assertThat(new RunCoordinator(state,client,client).dispatchOne("preflight")).isEmpty();
+      assertThat(peer.batches.stream().map(List::size)).containsExactly(512,512);
+      var item=Map.of("code","ING_SEMANTIC_REFERENCE_UNRESOLVABLE","index",700,
+          "semanticId",peer.revoked,"revisionId",pins.get(700).get("revisionId"));
+      for(var row:List.of(status(),latestHistory())){
+        assertThat(row).containsEntry("run_state","PAUSED").containsEntry("error_code","ING_SEMANTIC_BINDING_MISMATCH")
+            .containsEntry("semanticReference",item);
+      }
+      assertThat(acquire()).isEmpty();
+      assertThat(writes).hasValue(0);
+      assertThat(count("lake_write_evidence")).isZero();
+      assertThat(count("checkpoint_history")).isZero();
+      assertThat(count("handoff_outbox")).isZero();
+      assertThat(deliver()).isFalse();
+      assertThat(receipts).isEmpty();
+    }
+  }
+
+  @DisplayName("ING-51B2-PROGRESS / ING-51B-SCALE / ING-51B-REVOKE")
+  @ParameterizedTest @ValueSource(booleans={false,true})
+  @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+  void widePublicationResumesOnlyAfterRecheckingEveryPin(boolean revoke) throws Exception {
+    long started=System.nanoTime();
+    try(var peer=new SemanticGatewayFixture(directory)){
+      var pins=SemanticGatewayFixture.pins(1024);
+      var fields=new ArrayList<String>();
+      var mappings=new ArrayList<Map<String,String>>();
+      for(int i=0;i<pins.size();i++){
+        String field=i==0?"id":"column"+i;
+        fields.add(field);
+        mappings.add(Map.of("sourceField",field,"targetPropertyIri",SemanticGatewayFixture.id(i),"transform","IDENTITY"));
+      }
+      String cells=String.join(";",Collections.nCopies(1023,"value"));
+      byte[] csv=(String.join(";",fields)+"\n1;"+cells+"\n2;"+cells+"\n").getBytes(StandardCharsets.UTF_8);
+      String hash=ExecutionGatewayClient.hash(csv);
+      assets.put(hash,csv);
+      var candidate=new FrozenConfigurationProbeTest().candidate();
+      var cfg=PublishedActivation.map(candidate,"configuration");
+      candidate.put("sourceId",source);
+      cfg.put("bundle",Map.of("bundleId","wide","bundleVersion","1","source",
+          Map.of("sourceId",source,"sourceKind","INTERNAL_MANAGED","acquisitionMode","MANAGED")));
+      var runtime=PublishedActivation.map(PublishedActivation.map(cfg,"extractionProfile"),"runtime");
+      runtime.put("contentHash",hash);
+      var executionProfile=PublishedActivation.map(runtime,"execution");
+      executionProfile.put("expectedSize",csv.length);executionProfile.put("maxColumns",1024);
+      cfg.put("extractionProfile",Map.of("runtime",runtime,"projection",Map.of("PLACE",fields)));
+      cfg.put("semanticMapping",Map.of("sourceType",Map.of("sourceId",source,"typeCode","PLACE"),
+          "semanticRefs",SemanticGatewayFixture.refs(pins),"propertyMappings",mappings));
+      cfg.put("semanticReferenceBindings",pins);
+      candidate.put("configurationHash",FrozenConfigurationProbe.configurationHash(json,cfg));
+      var client=peer.client(Map.of());
+      peer.revoked=SemanticGatewayFixture.id(1010);
+      var probe=new FrozenConfigurationProbe(json,objects,client);
+      assertThatThrownBy(()->probe.probe(candidate)).isInstanceOfSatisfying(ValuePins.BindingFailure.class,
+          failure->{
+            var expected=Map.of("code","ING_SEMANTIC_REFERENCE_UNRESOLVABLE","index",1010,
+                "semanticId",peer.revoked,"revisionId",pins.get(1010).get("revisionId"));
+            assertThat(failure.detail()).isEqualTo(expected);
+            assertThat(new OnboardingReadinessApi(null,"tenant-a").invalidReference(failure).getBody())
+                .containsEntry("code","ING_SEMANTIC_BINDING_MISMATCH").containsEntry("semanticReference",expected);
+          });
+      assertThat(count("handoff_outbox")).isZero();
+      peer.revoked=null;peer.batches.clear();
+      var proof=probe.probe(candidate);
+      assertThat(proof).containsEntry("validatedRows",2L).containsEntry("semanticBindingCount",1024);
+
+      var envelope=PublishedActivationTest.envelope(source,true,1);
+      var published=PublishedActivation.map(envelope,"bundle");
+      for(String section:List.of("extractionProfile","semanticMapping","semanticReferenceBindings","sourceObjectIdentityPolicy","changeRepresentationProfile","dataAccessPolicies"))
+        published.put(section,cfg.get(section));
+      published.put("semanticRefs",SemanticGatewayFixture.refs(pins));
+      PublishedActivationTest.hash(published);envelope.put("checksum",published.get("checksum"));
+      peer.server.createContext("/api/onboarding/v1/runtime/publications/",e->{try(e){peer.reply(e,200,envelope);}});
+      current=client.decode(envelope);
+      activation.reconcile(current);
+      var snapshot=current.execution();
+      client.loadHistoricalAndVerify(source,snapshot.bundleId()+":"+snapshot.bundleVersion()+":"+snapshot.checksum());
+      UUID run=new RunCoordinator(state,client,client).dispatchOne("wide-preflight").orElseThrow();
+      var effects=new java.util.concurrent.ConcurrentHashMap<String,String>();
+      var calls=new AtomicInteger();
+      peer.server.createContext("/api/internal/v1/lake/objects",e->{try(e){
+        var body=json.readTree(e.getRequestBody());
+        // First attempt fails before any checkpoint. Next attempt commits one full record before the second 429.
+        int call=calls.incrementAndGet();
+        if(call==1 || call==5){
+          if(call==1 || revoke)e.getResponseHeaders().set("Retry-After",call==1?"1":"5");
+          else{
+            e.getResponseHeaders().set("X-RateLimit-Limit","60");
+            e.getResponseHeaders().set("X-RateLimit-Remaining","0");
+            e.getResponseHeaders().set("X-RateLimit-Reset","12.5");
+          }
+          peer.reply(e,429,Map.of());return;
+        }
+        String key=body.required("idempotencyKey").asText(), digest=body.required("contentHash").asText();
+        if(effects.putIfAbsent(key,digest)!=null){peer.reply(e,409,Map.of());return;}
+        peer.reply(e,201,Map.of("durable",true,"objectRef","lake:"+key,"contentHash",digest));
+      }});
+      lake=new ExecutionGatewayClient(json,execution,peer.url,peer.token.toString(),new GatewayPacing(k->k.endsWith("per-minute")?"60000":k.endsWith("server-wait-max-seconds")?"14":null));
+      var worker=new RunExecutionWorker(execution,b->new ManagedTabularAdapter(objects),
+          new CanonicalRecordPipeline(json,contracts,durable,quarantine,lake),schemas,state,client::verifyForRetry);
+      assertThat(worker.executeOne("wide-1")).contains(run);
+      assertThat(count("checkpoint_history")).isZero();
+      assertThat(db.sql("select consecutive_failures from ouf_ingestion.source_health where source_id=:s").param("s",source).query(Integer.class).single()).isOne();
+      var origin=db.sql("select retry_started_at from ouf_ingestion.ing_partition where run_id=:r").param("r",run).query(Timestamp.class).single();
+      assertThat(awaitWideRetry(worker,"wide-2")).contains(run);
+      assertThat(worker.executeOne("too-early")).isEmpty();
+      assertThat(count("checkpoint_history")).isOne();
+      assertThat(count("handoff_outbox")).isOne();
+      assertThat(effects).hasSize(3);
+      assertThat(status()).containsEntry("consecutive_failures",0);
+      assertThat(db.sql("select consecutive_failures,retry_attempts_in_window from ouf_ingestion.source_health where source_id=:s")
+          .param("s",source).query().singleRow()).containsEntry("consecutive_failures",0).containsEntry("retry_attempts_in_window",2);
+      assertThat(db.sql("""
+          select p.retry_attempts,p.retry_started_at, h.retry_not_before between h.last_failure_at+(:low*interval '1 second')
+              and h.last_failure_at+(:high*interval '1 second') and p.retry_at between h.retry_not_before
+              and clock_timestamp()+(:high*interval '1 second') short_delay
+          from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id)
+          join ouf_ingestion.source_health h on h.source_id=r.source_id where p.run_id=:r
+          """).param("r",run).param("low",revoke?5:13).param("high",revoke?6:14).query().singleRow()).containsEntry("retry_attempts",2).containsEntry("retry_started_at",origin).containsEntry("short_delay",true);
+      if(revoke)peer.revoked=SemanticGatewayFixture.id(1010);
+      assertThat(awaitWideRetry(worker,"wide-3")).contains(run);
+      assertThat(peer.batches.stream().map(List::size)).containsExactly(1000,24,1000,24,1000,24,1000,24,1000,24);
+      if(revoke){
+        assertThat(status()).containsEntry("run_state","PAUSED").containsEntry("error_code","ING_SEMANTIC_BINDING_MISMATCH")
+            .containsEntry("semanticReference",Map.of("code","ING_SEMANTIC_REFERENCE_UNRESOLVABLE","index",1010,"semanticId",peer.revoked,"revisionId",pins.get(1010).get("revisionId")));
+        assertThat(effects).hasSize(3);assertThat(count("handoff_outbox")).isOne();
+      }else{
+        assertThat(deliver()).isTrue();assertThat(deliver()).isTrue();assertThat(deliver()).isFalse();
+        execution.completeDrained();
+        assertThat(status()).containsEntry("run_state","SUCCEEDED");
+        assertThat(effects).hasSize(6);assertThat(receipts).hasSize(2).doesNotHaveDuplicates();
+        assertThat(count("checkpoint_history")).isEqualTo(2);
+      }
+      System.out.printf("D-082 ING-51B-%s: 1024 columns/pins, %d batch POST, %.3f s%n",
+          revoke?"REVOKE":"SCALE",peer.batches.size(),(System.nanoTime()-started)/1e9);
+    }finally{
+      db.sql("truncate ouf_ingestion.ing_schedule,ouf_ingestion.ing_run cascade").update();
+      db.sql("delete from ouf_ingestion.source_health where source_id=:s").param("s",source).update();
+    }
+  }
+
+  private Optional<UUID> awaitWideRetry(RunExecutionWorker worker,String owner)throws InterruptedException{
+    long deadline=System.nanoTime()+Duration.ofSeconds(20).toNanos();
+    do{
+      var claimed=worker.executeOne(owner);
+      if(claimed.isPresent())return claimed;
+      Thread.sleep(100);
+    }while(System.nanoTime()<deadline);
+    throw new AssertionError("Partition did not resume within its published delay");
+  }
 
   private void retryDue(){
     db.sql("update ouf_ingestion.ing_partition set retry_at=clock_timestamp()").update();

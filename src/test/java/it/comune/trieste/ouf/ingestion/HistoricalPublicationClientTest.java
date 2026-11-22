@@ -14,6 +14,7 @@ class HistoricalPublicationClientTest {
   var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
   server.createContext("/",e->{try{
    calls.add(e.getRequestURI().getPath());
+   if(ReferenceBatch.PATH.equals(e.getRequestURI().getPath())){e.sendResponseHeaders(404,-1);return;}
    if(fail.get()){e.sendResponseHeaders(404,-1);return;}
    Object value=e.getRequestURI().getPath().startsWith("/api/semantic")?Map.of("semantic_id","core","semantic_version","1","revision_id","00000000-0000-0000-0000-000000000001","publication_set_id","00000000-0000-0000-0000-000000000002","status",status.get()):envelope;
    byte[] bytes=PublishedActivationTest.JSON.writeValueAsBytes(value);e.sendResponseHeaders(200,bytes.length);e.getResponseBody().write(bytes);
@@ -27,7 +28,8 @@ class HistoricalPublicationClientTest {
    assertThatThrownBy(()->client.loadHistoricalAndVerify("test-source",ref+"wrong")).hasMessage("ING_HISTORICAL_REFERENCE_MISMATCH");
    status.set("DRAFT");assertThatThrownBy(()->client.loadHistoricalAndVerify("test-source",ref)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");
    fail.set(true);assertThatThrownBy(()->client.loadHistoricalAndVerify("test-source",ref)).hasMessage("ING_ACTIVATION_GATEWAY_404");
-   assertThat(calls).allMatch(p->p.equals("/api/onboarding/v1/runtime/publications/resolve")||p.equals("/api/semantic/v1/references:resolve"));
+   assertThat(Collections.frequency(calls,ReferenceBatch.PATH)).isOne();
+   assertThat(calls).filteredOn(p->!ReferenceBatch.PATH.equals(p)).allMatch(p->p.equals("/api/onboarding/v1/runtime/publications/resolve")||p.equals("/api/semantic/v1/references:resolve"));
   }finally{server.stop(0);Files.deleteIfExists(token);}
  }
 }

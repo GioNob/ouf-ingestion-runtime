@@ -109,6 +109,7 @@ class PublicationGatewayClientTest {
    var client=inMemoryClient(token,request->{
     String path=request.uri().getPath();
     requests.add(path);
+    if(path.equals(ReferenceBatch.PATH))return new Reply(404,List.of());
     if(path.equals("/api/semantic/v1/references:resolve")){
      return new Reply(200,List.of(utf8("""
          {"semantic_id":"core","semantic_version":"1","revision_id":"00000000-0000-0000-0000-000000000001",
@@ -124,7 +125,7 @@ class PublicationGatewayClientTest {
    assertThatThrownBy(()->client.loadAndVerify(source)).hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
    assertThatThrownBy(()->client.loadHistoricalAndVerify(source,reference)).hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
    assertThat(requests).containsExactly(PUBLICATIONS+"/test-source/active",PUBLICATIONS+"/resolve",
-       "/api/semantic/v1/references:resolve",PUBLICATIONS+"/test-source/active",PUBLICATIONS+"/resolve");
+       ReferenceBatch.PATH,"/api/semantic/v1/references:resolve",PUBLICATIONS+"/test-source/active",PUBLICATIONS+"/resolve");
   } finally {Files.deleteIfExists(token);}
  }
 
@@ -192,6 +193,7 @@ class PublicationGatewayClientTest {
   var token=Files.createTempFile("datatype-test-",".token");
   try {
    Files.writeString(token,"test-token");
+   legacyEndpoint(server);
    server.createContext("/api/semantic/v1/references:resolve",exchange->{
     try {
      var pin=exchange.getRequestURI().getQuery().contains("semanticId="+parent+"&")?bindings.getFirst():bindings.getLast();
@@ -235,6 +237,7 @@ class PublicationGatewayClientTest {
   var token=Files.createTempFile("value-map-test-",".token");
   try {
    Files.writeString(token,"test-token");
+   legacyEndpoint(server);
    server.createContext("/api/semantic/v1/references:resolve",exchange->{
     try {
      String query="semanticId="+id+"&revisionId="+revision+"&publicationSetId="+set;
@@ -282,22 +285,23 @@ class PublicationGatewayClientTest {
    assertThat(calls).hasValue(count);
   } finally {server.stop(0);Files.deleteIfExists(token);}
  }
- @Test void nativeClassAndTwentyPropertiesRemainExactlyPinnedWithinTheBound()throws Exception{
+ @Test void legacyResolutionChecksEveryPinBeyond32()throws Exception{
   for(int count:List.of(21,32,33)){
    var envelope=PublishedActivationTest.envelope("native-source",true,1);var published=PublishedActivation.map(envelope,"bundle");
    var bindings=new ArrayList<Map<String,Object>>();var refs=new ArrayList<String>();
    for(int i=0;i<count;i++){String id="urn:native:"+i;refs.add(id+"@1");bindings.add(Map.of("semanticId",id,"semanticVersion","1","revisionId",new UUID(0,i+1).toString(),"publicationSetId",new UUID(1,1).toString()));}
    published.put("semanticReferenceBindings",bindings);published.put("semanticRefs",refs);PublishedActivationTest.hash(published);envelope.put("checksum",published.get("checksum"));
    var calls=new AtomicInteger();var corruptLast=new AtomicBoolean();Path token=Files.createTempFile("native-client-",".token");Files.writeString(token,"test-token");var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+   legacyEndpoint(server);
    server.createContext("/",exchange->{try{if(!"Bearer test-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))){exchange.sendResponseHeaders(403,-1);return;}calls.incrementAndGet();var query=new HashMap<String,String>();for(String part:exchange.getRequestURI().getRawQuery().split("&")){String[] pair=part.split("=",2);query.put(pair[0],URLDecoder.decode(pair[1],java.nio.charset.StandardCharsets.UTF_8));}String id=query.get("semanticId");int index=Integer.parseInt(id.substring(id.lastIndexOf(':')+1));var response=Map.of("semantic_id",id,"semantic_version",corruptLast.get()&&index==count-1?"2":"1","revision_id",query.get("revisionId"),"publication_set_id",query.get("publicationSetId"),"status","ACTIVE");byte[] body=PublishedActivationTest.JSON.writeValueAsBytes(response);exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);}finally{exchange.close();}});server.start();
-   try{var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");var bundle=client.decode(envelope).execution();
-    if(count>32){assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");assertThat(calls).hasValue(0);}
-    else{client.preflight(bundle);assertThat(calls).hasValue(count);corruptLast.set(true);assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");assertThat(calls).hasValue(count*2);}
+   try{var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a",new GatewayPacing(k->k.endsWith("references-per-minute")?"60000":null));var bundle=client.decode(envelope).execution();
+    client.preflight(bundle);assertThat(calls).hasValue(count);corruptLast.set(true);assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");assertThat(calls).hasValue(count*2);
    }finally{server.stop(0);Files.deleteIfExists(token);}
   }
  }
  @Test void exactReferenceAndActivePublicationAreRecheckedWithWorkloadCredential()throws Exception{
   var envelope=PublishedActivationTest.envelope("test-source",false,1);var mode=new AtomicInteger();var query=new AtomicReference<String>();Path token=Files.createTempFile("activation-client-",".token");Files.writeString(token,"test-token");HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  legacyEndpoint(server);
   server.createContext("/",exchange->{try{if(!"Bearer test-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))||mode.get()==3){exchange.sendResponseHeaders(403,-1);return;}
    Map<String,Object> response;if(exchange.getRequestURI().getPath().startsWith("/api/semantic")){query.set(exchange.getRequestURI().getQuery());response=Map.of("semantic_id","core","semantic_version",mode.get()==1?"2":"1","revision_id","00000000-0000-0000-0000-000000000001","publication_set_id","00000000-0000-0000-0000-000000000002","status","ACTIVE");}else{response=new LinkedHashMap<>(envelope);if(mode.get()==2)response.put("publicationId",UUID.randomUUID().toString());}
    byte[] body=PublishedActivationTest.JSON.writeValueAsBytes(response);exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
@@ -306,6 +310,10 @@ class PublicationGatewayClientTest {
    assertThat(client.loadAndVerify(claim).checksum()).isEqualTo(a.execution().checksum());client.preflight(a.execution());assertThat(query.get()).contains("revisionId=00000000-0000-0000-0000-000000000001","publicationSetId=00000000-0000-0000-0000-000000000002");
    mode.set(1);assertThatThrownBy(()->client.preflight(a.execution())).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");mode.set(2);assertThatThrownBy(()->client.loadAndVerify(claim)).hasMessage("ING_ACTIVE_PUBLICATION_CHANGED");mode.set(3);assertThatThrownBy(()->client.loadAndVerify(claim)).isInstanceOf(RuntimePorts.GatewayFailure.class).hasMessage("ING_ACTIVATION_GATEWAY_403");
   }finally{server.stop(0);Files.deleteIfExists(token);}
+ }
+
+ static void legacyEndpoint(HttpServer server){
+  server.createContext(ReferenceBatch.PATH,e->{try{e.sendResponseHeaders(404,-1);}finally{e.close();}});
  }
 
  private static Map<String,Object> widePublication(String source,int size) throws Exception {

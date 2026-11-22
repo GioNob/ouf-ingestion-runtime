@@ -29,6 +29,8 @@ def launch(name,args,env):
  f=open(evidence/(name+'.log'),'w');logs.append(f);p=subprocess.Popen(args,cwd=root,env=env,stdout=f,stderr=subprocess.STDOUT);processes.append(p);return p
 class Gateway(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
+ def do_POST(self):
+  self.send_error(405)
  def do_GET(self):
   if self.headers.get('Authorization')!='Bearer '+token:self.send_error(403);return
   path=urlparse(self.path)

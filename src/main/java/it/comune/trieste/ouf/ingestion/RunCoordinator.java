@@ -24,13 +24,20 @@ public class RunCoordinator {
       semantic.preflight(b);state.completePreflight(c,run);}
     catch(RuntimeException failure){
       Failure classified=classify(failure);
-      try{if(c.publicationId()!=null)state.activationFailed(c,run,classified);else{if(run!=null)state.failPreflight(c,run,classified.code());state.recordFailure(c.sourceId(),classified.code(),classified.errorClass(),classified.retryAfter());state.releaseSchedule(c,false);}}catch(IllegalStateException lost){LOG.warn("ING_SCHEDULE_RECOVERY_REQUIRED");}
+      try{if(c.publicationId()!=null)state.activationFailed(c,run,classified);else{if(run!=null)state.failPreflight(c,run,classified);state.recordFailure(c.sourceId(),classified.code(),classified.errorClass(),classified.retryAfter());state.releaseSchedule(c,false);}}catch(IllegalStateException lost){LOG.warn("ING_SCHEDULE_RECOVERY_REQUIRED");}
       LOG.atWarn().addKeyValue("event","INGESTION_PREFLIGHT_FAILED").addKeyValue("runId",run).addKeyValue("sourceId",c.sourceId()).addKeyValue("errorCode",classified.code()).log("Ingestion run preflight failed");return Optional.empty();
     }
     state.recordSuccess(c.sourceId());LOG.atInfo().addKeyValue("event","INGESTION_RUN_STARTED").addKeyValue("runId",run).addKeyValue("sourceId",c.sourceId()).log("Ingestion run passed preflight");return Optional.of(run);
   }
-  static Failure classify(RuntimeException failure){if(failure instanceof AdapterSpi.AdapterException a)return new Failure(a.code(),a.errorClass(),a.retryAfter().orElse(null));if(failure instanceof RuntimePorts.GatewayFailure g)return new Failure(g.safeCode(),g.errorClass(),g.retryAfter().orElse(null));String code=failure.getMessage()!=null&&failure.getMessage().matches("ING_[A-Z0-9_]{1,76}")?failure.getMessage():"ING_PREFLIGHT_FAILED";return new Failure(code,AdapterSpi.ErrorClass.CONFIGURATION,null);}
-  record Failure(String code,AdapterSpi.ErrorClass errorClass,Duration retryAfter){
+  static Failure classify(RuntimeException failure){
+    if(failure instanceof ValuePins.BindingFailure pin)return new Failure(pin.getMessage(),AdapterSpi.ErrorClass.CONFIGURATION,null,pin);
+    if(failure instanceof AdapterSpi.AdapterException a)return new Failure(a.code(),a.errorClass(),a.retryAfter().orElse(null));
+    if(failure instanceof RuntimePorts.GatewayFailure g)return new Failure(g.safeCode(),g.errorClass(),g.retryAfter().orElse(null));
+    String code=failure.getMessage()!=null&&failure.getMessage().matches("ING_[A-Z0-9_]{1,76}")?failure.getMessage():"ING_PREFLIGHT_FAILED";
+    return new Failure(code,AdapterSpi.ErrorClass.CONFIGURATION,null);
+  }
+  record Failure(String code,AdapterSpi.ErrorClass errorClass,Duration retryAfter,ValuePins.BindingFailure reference){
+    Failure(String code,AdapterSpi.ErrorClass type,Duration retryAfter){this(code,type,retryAfter,null);}
     Failure { if(code==null || !code.matches("ING_[A-Z0-9_]{1,76}"))code="ING_RUNTIME_FAILURE"; }
   }
 }

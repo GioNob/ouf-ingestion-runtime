@@ -25,7 +25,7 @@ jobs:
         with: {fetch-depth: 0, persist-credentials: false}
       - name: Verify predecessor return and restart the candidate after a synthetic migration
         env:
-          PREDECESSOR: ${{ inputs.predecessor || '8be19a3687ddb4388fee655998914ed127643a65' }}
+          PREDECESSOR: ${{ inputs.predecessor || 'aafeb5683b5b00b7730e6491ff9956a9fb914231' }}
           PGHOST: 127.0.0.1
           PGPORT: ${{ job.services.postgres.ports[5432] }}
           PGDATABASE: ouf_ingestion

@@ -79,9 +79,9 @@ ouf.ingestion.activation.poll-ms=10000
 The token file is supplied by the approved workload identity mechanism and reread
 for each request; it is never logged or copied into bundle/snapshot/evidence.
 Gateway must route the protected publication feed/ACTIVE lookup and exact Semantic
-resolve. Redirects are disabled, each response is limited to 2 MiB, discovery pages
-to 20 publications, Semantic bindings to 20, and each complete HTTP exchange to
-five seconds. One bounded page and one dispatch are attempted per loop. Discovery
+resolve. Redirects are disabled, configuration responses are limited to 3 MiB, other responses to 2 MiB,
+discovery pages to 20 publications, and each complete HTTP exchange to five seconds.
+Exact Semantic bindings follow the [batch contract](NATIVE_SEMANTIC_REFERENCE_BOUND.md). One bounded page and one dispatch are attempted per loop. Discovery
 freshness is limited to five minutes; tune loop capacity for catalog size without
 changing source cadence. The configured namespace is the platform control-plane
 catalog namespace, not a data-row tenant filter. Multi-tenant data ownership and

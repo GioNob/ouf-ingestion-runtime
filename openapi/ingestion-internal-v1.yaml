@@ -83,6 +83,15 @@ components:
           description: COMPLETED requires a successful run, durable UDP acknowledgements for every handoff and a pinned typeCode.
           enum: [AWAITING_START, BLOCKED, DISABLED, READY, PREFLIGHT, RUNNING, DRAINING, RETRY_WAIT, SUCCEEDED, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, PAUSED, ABORTED]
         recoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
+        semanticReference:
+          type: object
+          description: Exact failing pin in the verified publication, using its zero-based bundle index.
+          required: [index, semanticId, revisionId]
+          properties:
+            code: {type: string, description: Cause for this pin. Older events may omit it.}
+            index: {type: integer, minimum: 0}
+            semanticId: {type: string}
+            revisionId: {type: string, format: uuid}
         retryAt: {type: string, format: date-time, description: Persisted eligibility time for the next automatic action, subject to owner admission.}
         decisionDeadline:
           type: string

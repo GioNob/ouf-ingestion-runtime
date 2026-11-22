@@ -11,3 +11,18 @@ Il servizio che rinnova il bearer deve scrivere il file completo in un temporane
 Il profilo di lettura locale v1 ammette tre letture con attese di 25 e 50 ms dopo un errore. Esaurite le letture, il worker rilascia la lease e usa il budget del run. Una risposta di diniego del Gateway mantiene la propria classificazione.
 
 D-085 ritira la chiave `ouf.ingestion.recovery.ths-origin` (`OUF_ING_RECOVERY_THS_ORIGIN`) dal registro D-065. Rimuoverla dai profili Ingestion salvati. Onboarding gestisce l’origine della THS tramite la propria configurazione.
+
+## Parametri Gateway del worker
+
+Proprietà intere positive con prefisso `ouf.ingestion.gateway.`. Registrare e ripristinare ciascun valore nel profilo di installazione. I valori seguenti sono default di sviluppo. Nessun parametro contiene credenziali.
+
+| Proprietà dopo il prefisso | Default | Scopo |
+|---|---:|---|
+| `reference-batch-bytes` | 262144 | Massimo di byte UTF-8 per corpo POST completo. |
+| `reference-batch-items` | 1000 | Numero massimo di tuple per blocco, da 1 a 1000. |
+| `reference-fallback-seconds` | 300 | Durata in secondi della ricaduta GET dopo un POST 404 o 405. |
+| `lake-per-minute` | 60 | Ritmo massimo per processo delle scritture lake. |
+| `handoff-per-minute` | 60 | Ritmo massimo per processo delle consegne handoff. |
+| `references-per-minute` | 60 | Ritmo massimo per processo delle richieste di risoluzione GET e POST. |
+| `other-retry-per-minute` | 60 | Ritmo di ripresa per le rotte Gateway senza dosatore dedicato. Senza header validi, l’intervallo di base è 60 secondi diviso per il ritmo. |
+| `server-wait-max-seconds` | 86400 | Tetto in secondi dell’attesa indicata dal Gateway, incluso il jitter, e della finestra usata dal dosatore. Il backoff senza progresso e i budget durevoli si applicano separatamente. |
