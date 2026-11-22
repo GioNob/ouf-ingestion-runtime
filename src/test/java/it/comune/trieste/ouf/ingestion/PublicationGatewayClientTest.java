@@ -2,25 +2,29 @@ package it.comune.trieste.ouf.ingestion;
 import static org.assertj.core.api.Assertions.*;
 import com.sun.net.httpserver.HttpServer;
 import java.net.*;
+import java.net.http.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class PublicationGatewayClientTest {
- @Test void onlyFrozenConfigurationAcceptsThreeMebibytes() throws Exception {
-  int twoMiB=2*1024*1024, threeMiB=3*1024*1024;
-  var size=new AtomicInteger(threeMiB);
+ private static final int TWO_MIB=2*1024*1024, THREE_MIB=3*1024*1024;
+ private static final String PUBLICATIONS="/api/onboarding/v1/runtime/publications";
+
+ @Test void frozenConfigurationAcceptsThreeMebibytesAndCompatibilityRemainsAtTwo() throws Exception {
+  var size=new AtomicInteger(THREE_MIB);
   var token=Files.createTempFile("frozen-response-test-",".token");
   var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
   try {
    Files.writeString(token,"test-token");
    server.createContext("/",exchange->{
     try {
-     byte[] body=new byte[size.get()];
-     Arrays.fill(body,(byte)' ');
-     body[0]='{';
-     body[1]='}';
+     byte[] body=pad(utf8("{}"),size.get());
      exchange.sendResponseHeaders(200,0);
      exchange.getResponseBody().write(body);
     } finally {exchange.close();}
@@ -29,15 +33,148 @@ class PublicationGatewayClientTest {
    var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
    var version=UUID.randomUUID();
    assertThat(client.frozenConfiguration("test-source",version,"test-hash")).isEmpty();
-   size.set(threeMiB+1);
+   size.set(THREE_MIB+1);
    assertThatThrownBy(()->client.frozenConfiguration("test-source",version,"test-hash"))
        .hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
-   size.set(twoMiB);
+   size.set(TWO_MIB);
    assertThat(client.compatibility("test-source",version,"test-hash")).isEmpty();
-   size.set(twoMiB+1);
+   size.set(TWO_MIB+1);
    assertThatThrownBy(()->client.compatibility("test-source",version,"test-hash"))
        .hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
   } finally {server.stop(0);Files.deleteIfExists(token);}
+ }
+
+ @Test void discoverPaginatesAllLargePublicationsInOrder() throws Exception {
+  var sourceIds=new ArrayList<String>();
+  var rows=new ArrayList<byte[]>();
+  var pins=List.of(largeValueMapPin(1,354),largeValueMapPin(2,356));
+  ValuePins.embedded(pins);
+  for(int i=0;i<20;i++){
+   String sourceId="source-"+(10+i);
+   sourceIds.add(sourceId);
+   var envelope=PublishedActivationTest.envelope(sourceId,true,1);
+   var bundle=PublishedActivation.map(envelope,"bundle");
+   bundle.put("semanticReferenceBindings",pins);
+   bundle.put("semanticRefs",pins.stream().map(pin->pin.get("semanticId")+"@1").toList());
+   PublishedActivationTest.hash(bundle);
+   envelope.put("checksum",bundle.get("checksum"));
+   rows.add(PublishedActivationTest.JSON.writeValueAsBytes(envelope));
+  }
+  assertThat(rows.getFirst().length+rows.get(1).length).isGreaterThan(TWO_MIB);
+
+  var requests=new ArrayList<String>();
+  var token=Files.createTempFile("discover-large-test-",".token");
+  try {
+   var client=inMemoryClient(token,request->{
+    assertThat(request.uri().getPath()).isEqualTo(PUBLICATIONS);
+    String query=request.uri().getQuery();
+    requests.add(query);
+    String[] parts=query.split("&after=",2);
+    int limit=Integer.parseInt(parts[0].substring("limit=".length()));
+    int start=sourceIds.indexOf(parts[1])+1;
+    int end=Math.min(start+limit,rows.size());
+    return pageReply(rows.subList(start,end),end-start==limit?sourceIds.get(end-1):"");
+   });
+   var discovered=new ArrayList<String>();
+   String cursor="";
+   for(int offset=0;offset<sourceIds.size();offset+=2){
+    var page=client.discover(cursor);
+    assertThat(page.items()).hasSize(2);
+    boolean last=offset+2==sourceIds.size();
+    assertThat(requests).containsExactlyElementsOf(last?pageQueries(cursor,20):pageQueries(cursor,20,10,5,2));
+    requests.clear();
+    discovered.addAll(page.items().stream().map(client::decode).map(PublishedActivation::sourceId).toList());
+    assertThat(page.nextAfter()).isEqualTo(last?"":sourceIds.get(offset+1));
+    cursor=page.nextAfter();
+   }
+   var terminal=client.discover(sourceIds.getLast());
+   assertThat(terminal.items()).isEmpty();
+   assertThat(terminal.nextAfter()).isEmpty();
+   assertThat(requests).containsExactly("limit=20&after="+sourceIds.getLast());
+   assertThat(discovered).containsExactlyElementsOf(sourceIds);
+  } finally {Files.deleteIfExists(token);}
+ }
+
+ @Test void activeAndResolveEnforceTheThreeMebibyteBoundary() throws Exception {
+  String source="test-source";
+  var envelope=widePublication(source,THREE_MIB);
+  var bundle=PublishedActivation.decode(envelope,"tenant-a",PublishedActivationTest.JSON).execution();
+  String reference=bundle.bundleId()+":"+bundle.bundleVersion()+":"+bundle.checksum();
+  byte[] exact=PublishedActivationTest.JSON.writeValueAsBytes(envelope);
+  assertThat(exact.length).isEqualTo(THREE_MIB);
+  var oversized=new AtomicBoolean();
+  var requests=new ArrayList<String>();
+  var token=Files.createTempFile("publication-size-test-",".token");
+  try {
+   var client=inMemoryClient(token,request->{
+    String path=request.uri().getPath();
+    requests.add(path);
+    if(path.equals("/api/semantic/v1/references:resolve")){
+     return new Reply(200,List.of(utf8("""
+         {"semantic_id":"core","semantic_version":"1","revision_id":"00000000-0000-0000-0000-000000000001",
+          "publication_set_id":"00000000-0000-0000-0000-000000000002","status":"ACTIVE"}
+         """)));
+    }
+    if(path.equals(PUBLICATIONS+"/resolve"))assertThat(request.uri().getQuery()).isEqualTo("bundleRef="+reference);
+    return new Reply(200,oversized.get()?List.of(exact,utf8(" ")):List.of(exact));
+   });
+   assertThat(client.loadAndVerify(source).checksum()).isEqualTo(bundle.checksum());
+   assertThat(client.loadHistoricalAndVerify(source,reference).checksum()).isEqualTo(bundle.checksum());
+   oversized.set(true);
+   assertThatThrownBy(()->client.loadAndVerify(source)).hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+   assertThatThrownBy(()->client.loadHistoricalAndVerify(source,reference)).hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+   assertThat(requests).containsExactly(PUBLICATIONS+"/test-source/active",PUBLICATIONS+"/resolve",
+       "/api/semantic/v1/references:resolve",PUBLICATIONS+"/test-source/active",PUBLICATIONS+"/resolve");
+  } finally {Files.deleteIfExists(token);}
+ }
+
+ @Test void discoverRejectsOversizedSinglePublicationAfterFiveReads() throws Exception {
+  var envelope=widePublication("source-02",THREE_MIB+1);
+  byte[] row=PublishedActivationTest.JSON.writeValueAsBytes(envelope);
+  assertThat(row.length).isEqualTo(THREE_MIB+1);
+  var requests=new ArrayList<String>();
+  var token=Files.createTempFile("discover-single-test-",".token");
+  try {
+   var client=inMemoryClient(token,request->{
+    String query=request.uri().getQuery();
+    requests.add(query);
+    return pageReply(List.of(row),query.startsWith("limit=1&")?"source-02":"");
+   });
+   assertThatThrownBy(()->client.discover("source-01")).hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+   assertThat(requests).containsExactlyElementsOf(pageQueries("source-01",20,10,5,2,1));
+  } finally {Files.deleteIfExists(token);}
+ }
+
+ @Test void discoverValidatesTheReducedLimitAndCursor() throws Exception {
+  var rows=List.of(utf8("{}"),utf8("{}"),utf8("{}"));
+  var oversized=new Reply(200,List.of(pad(utf8("{}"),THREE_MIB+1)));
+  var token=Files.createTempFile("discover-invalid-test-",".token");
+  try {
+   for(var invalid:List.of(pageReply(rows,"source-02"),pageReply(rows.subList(0,2),"source-01"))){
+    var requests=new ArrayList<String>();
+    var client=inMemoryClient(token,request->{
+     String query=request.uri().getQuery();
+     requests.add(query);
+     return query.startsWith("limit=2&")?invalid:oversized;
+    });
+    assertThatThrownBy(()->client.discover("source-01")).hasMessage("ING_PUBLICATION_PAGE_INVALID");
+    assertThat(requests).containsExactlyElementsOf(pageQueries("source-01",20,10,5,2));
+   }
+  } finally {Files.deleteIfExists(token);}
+ }
+
+ @Test void discoverDoesNotRepeatServiceUnavailable() throws Exception {
+  var requests=new ArrayList<String>();
+  var token=Files.createTempFile("discover-unavailable-test-",".token");
+  try {
+   var client=inMemoryClient(token,request->{
+    requests.add(request.uri().getQuery());
+    return new Reply(503,List.of());
+   });
+   assertThatThrownBy(()->client.discover("source-01"))
+       .isInstanceOf(RuntimePorts.GatewayFailure.class).hasMessage("ING_ACTIVATION_GATEWAY_503");
+   assertThat(requests).containsExactly("limit=20&after=source-01");
+  } finally {Files.deleteIfExists(token);}
  }
 
  @Test void resolvedNestedDatatypeMustMatchDigestAndPreparationStatus() throws Exception {
@@ -169,5 +306,86 @@ class PublicationGatewayClientTest {
    assertThat(client.loadAndVerify(claim).checksum()).isEqualTo(a.execution().checksum());client.preflight(a.execution());assertThat(query.get()).contains("revisionId=00000000-0000-0000-0000-000000000001","publicationSetId=00000000-0000-0000-0000-000000000002");
    mode.set(1);assertThatThrownBy(()->client.preflight(a.execution())).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");mode.set(2);assertThatThrownBy(()->client.loadAndVerify(claim)).hasMessage("ING_ACTIVE_PUBLICATION_CHANGED");mode.set(3);assertThatThrownBy(()->client.loadAndVerify(claim)).isInstanceOf(RuntimePorts.GatewayFailure.class).hasMessage("ING_ACTIVATION_GATEWAY_403");
   }finally{server.stop(0);Files.deleteIfExists(token);}
+ }
+
+ private static Map<String,Object> widePublication(String source,int size) throws Exception {
+  var envelope=PublishedActivationTest.envelope(source,true,1);
+  var bundle=PublishedActivation.map(envelope,"bundle");
+  var extraction=new LinkedHashMap<>(PublishedActivation.map(bundle,"extractionProfile"));
+  bundle.put("extractionProfile",extraction);
+  extraction.put("description","");
+  int baseSize=PublishedActivationTest.JSON.writeValueAsBytes(envelope).length;
+  extraction.put("description","x".repeat(size-baseSize));
+  PublishedActivationTest.hash(bundle);
+  envelope.put("checksum",bundle.get("checksum"));
+  return envelope;
+ }
+
+ private static Map<String,Object> largeValueMapPin(int number,int conceptPadding){
+  String id="urn:map:"+number, set=new UUID(1,number).toString();
+  String target="urn:vocab@"+set;
+  String codePrefix="e".repeat(124), conceptPrefix="urn:concept:"+"x".repeat(conceptPadding);
+  var entries=new ArrayList<Map<String,String>>();
+  for(int i=1000;i<2000;i++)entries.add(Map.of("code",codePrefix+i,"concept",conceptPrefix+i));
+  var definition=Map.of("targetVocabulary",target,"entries",entries);
+  return Map.of("semanticId",id,"semanticVersion","1","publicationSetId",set,"revisionId",new UUID(0,number).toString(),
+      "valueMapRef",id+"@"+set,"targetVocabulary",target,"definition",definition,"definitionSha256",ValuePins.digest(definition));
+ }
+
+ private static List<String> pageQueries(String after,int... limits){
+  return Arrays.stream(limits).mapToObj(limit->"limit="+limit+"&after="+after).toList();
+ }
+
+ private static Reply pageReply(List<byte[]> rows,String cursor){
+  var chunks=new ArrayList<byte[]>();
+  chunks.add(utf8("{\"items\":["));
+  byte[] separator=utf8(",");
+  for(byte[] row:rows){
+   if(chunks.size()>1)chunks.add(separator);
+   chunks.add(row);
+  }
+  chunks.add(utf8("],\"nextAfter\":\""+cursor+"\"}"));
+  return new Reply(200,chunks);
+ }
+
+ private static byte[] utf8(String value){return value.getBytes(StandardCharsets.UTF_8);}
+
+ private static byte[] pad(byte[] json,int size){
+  byte[] body=Arrays.copyOf(json,size);
+  Arrays.fill(body,json.length,size,(byte)' ');
+  return body;
+ }
+
+ private static PublicationGatewayClient inMemoryClient(Path token,Function<HttpRequest,Reply> route) throws Exception {
+  Files.writeString(token,"test-token");
+  return new PublicationGatewayClient(PublishedActivationTest.JSON,"http://gateway.invalid",token.toString(),"tenant-a",(request,handler)->{
+   var reply=route.apply(request);
+   var subscriber=handler.apply(new InMemoryResponse(request,reply.status(),null));
+   var subscription=new InMemorySubscription();
+   subscriber.onSubscribe(subscription);
+   for(byte[] chunk:reply.chunks()){
+    subscriber.onNext(List.of(ByteBuffer.wrap(chunk)));
+    if(subscription.cancelled)break;
+   }
+   if(!subscription.cancelled)subscriber.onComplete();
+   return subscriber.getBody().toCompletableFuture().thenApply(body->new InMemoryResponse(request,reply.status(),body));
+  });
+ }
+
+ private record Reply(int status,List<byte[]> chunks){}
+
+ private static final class InMemorySubscription implements Flow.Subscription {
+  private boolean cancelled;
+  @Override public void request(long n){}
+  @Override public void cancel(){cancelled=true;}
+ }
+
+ private record InMemoryResponse(HttpRequest request,int statusCode,byte[] body)
+     implements HttpResponse<byte[]>, HttpResponse.ResponseInfo {
+  @Override public HttpHeaders headers(){return HttpHeaders.of(Map.of(),(name,value)->true);}
+  @Override public Optional<HttpResponse<byte[]>> previousResponse(){return Optional.empty();}
+  @Override public Optional<javax.net.ssl.SSLSession> sslSession(){return Optional.empty();}
+  @Override public URI uri(){return request.uri();}
+  @Override public HttpClient.Version version(){return HttpClient.Version.HTTP_1_1;}
  }
 }
