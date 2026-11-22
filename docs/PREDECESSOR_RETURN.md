@@ -1,6 +1,6 @@
 # Ritorno al predecessore di Ingestion (D-080)
 
-Il predecessore supportato per questo rilascio è `6f0504240b2653e5aa93729ae70cedc52228515d`, in esercizio dal 21 novembre 2026 con schema V21. Il candidato del task-27b conserva V21 e introduce la readiness che gli permetterà di operare come predecessore dopo una migrazione successiva. Il riferimento di CI è lo SHA completo nel job `predecessor-return` di [module-ci.yml](../.github/workflows/module-ci.yml).
+Il predecessore supportato per questo rilascio è `8be19a3687ddb4388fee655998914ed127643a65` (PR #53, lettori tipizzati del task-39b), in esercizio dal 22 novembre 2026 con schema V21. Il rilascio precedente, `6f0504240b2653e5aa93729ae70cedc52228515d`, ha introdotto la readiness che permette a ogni revisione successiva di operare come predecessore. Il candidato dei tipi di valore (task-43, D-084) conserva V21. Il riferimento di CI è lo SHA completo nel job `predecessor-return` di [module-ci.yml](../.github/workflows/module-ci.yml).
 
 ## Regola per le migrazioni
 
