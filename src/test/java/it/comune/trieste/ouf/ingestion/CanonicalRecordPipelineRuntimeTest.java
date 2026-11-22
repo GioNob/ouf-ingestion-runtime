@@ -92,6 +92,19 @@ import org.springframework.test.context.*;
     assertThat(lineage).contains("DECIMAL_COMMA_V1","DATE_DMY_V1","mapping:places:1","rawObjectRef");
   }
 
+  @Test void emptyLatitudePassesCompatibilityAndIsOmittedFromHandoff() throws Exception {
+    var lake=new RecordingLake();var pipeline=pipeline(lake);
+    var cells=Map.<String,Object>of("latitude","","name","");
+    var command=command(run(),cells,List.of(
+        Map.of("sourceField","latitude","targetPropertyIri","https://example.test/latitude","transform","DECIMAL_DOT_V1"),
+        mapping("name","https://example.test/name")));
+    pipeline.validateForCompatibility(command);
+    var result=pipeline.process(command);
+    assertThat(result.succeeded()).isTrue();
+    assertThat(json.readTree(lake.raw)).isEqualTo(json.valueToTree(cells));
+    assertThat(payload(result.handoffId()).get("canonicalPayload")).isEqualTo(Map.of("https://example.test/name",""));
+  }
+
   @Test void invalidTypedCellQuarantinesOnlyRawEvidenceWithoutProgress() {
     UUID run=run();var lake=new RecordingLake();
     var result=pipeline(lake).process(command(run,Map.of("day","31/04/2024"),List.of(

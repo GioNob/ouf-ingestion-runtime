@@ -57,7 +57,7 @@ class FrozenConfigurationProbeTest {
     assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_TRANSFORM_UNSUPPORTED");
   }
   @Test void decimalDotInFrozenCsvPassesOnEveryRow(){
-    var proof=decimalProbe("45.6500","13.776");
+    var proof=decimalProbe(" +00045.6500 ","");
     assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L)
         .containsEntry("attestationSubmitted",false);
   }

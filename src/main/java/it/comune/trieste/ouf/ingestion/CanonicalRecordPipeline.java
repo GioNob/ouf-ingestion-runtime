@@ -73,11 +73,13 @@ public final class CanonicalRecordPipeline {
   private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),optional(c,"authorityPolicyRef"),strings(c.get("mappingRefs")),strings(c.get("relationshipResolutionStrategyRefs")),labels(c.get("dataAccessLabels")),mappings(c.get("propertyMappings")),required(c,"observationPolicy"),changeProfile(c.get("changeRepresentationProfile")));}
   private Map<String,Object> map(AdapterSpi.SourceRecord record,List<Mapping> mappings){
     Map<String,Object> out=new LinkedHashMap<>();
+    Set<String> targets=new HashSet<>();
     for(Mapping mapping:mappings){
       var rule=ConfiguredValueTransform.resolve(mapping.transform());
       if(!record.payload().containsKey(mapping.sourceField()))throw failure("ING_MAPPING_SOURCE_FIELD_MISSING");
-      if(out.containsKey(mapping.targetPropertyIri()))throw failure("ING_MAPPING_TARGET_DUPLICATE");
-      out.put(mapping.targetPropertyIri(),rule.apply(record.payload().get(mapping.sourceField()),record.ordinal()));
+      if(!targets.add(mapping.targetPropertyIri()))throw failure("ING_MAPPING_TARGET_DUPLICATE");
+      Object value=rule.apply(record.payload().get(mapping.sourceField()),record.ordinal());
+      if(value!=null || rule==ConfiguredValueTransform.IDENTITY)out.put(mapping.targetPropertyIri(),value);
     }
     return out;
   }

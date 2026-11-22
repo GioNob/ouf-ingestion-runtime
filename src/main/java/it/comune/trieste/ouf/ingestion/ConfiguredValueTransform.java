@@ -12,8 +12,8 @@ import java.util.regex.Pattern;
 enum ConfiguredValueTransform {
   IDENTITY, DECIMAL_DOT_V1, DECIMAL_COMMA_V1, DATE_ISO_V1, DATE_DMY_V1;
 
-  private static final Pattern DOT = Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?");
-  private static final Pattern COMMA = Pattern.compile("-?(0|[1-9][0-9]*)(,[0-9]+)?");
+  private static final Pattern DOT = Pattern.compile("[+-]?[0-9]+(\\.[0-9]+)?");
+  private static final Pattern COMMA = Pattern.compile("[+-]?[0-9]+(,[0-9]+)?");
   private static final DateTimeFormatter DMY = DateTimeFormatter.ofPattern("dd/MM/uuuu", Locale.ROOT)
       .withResolverStyle(ResolverStyle.STRICT);
 
@@ -30,16 +30,15 @@ enum ConfiguredValueTransform {
 
   Object apply(Object value, long rowOrdinal) {
     // IDENTITY also supports non-CSV adapters with historical non-string values.
+    if (this == IDENTITY || value == null) return value;
+    if (!(value instanceof String text)) throw new InvalidValue(rowOrdinal);
+    String stripped = text.strip();
+    if (stripped.isEmpty()) return null;
     return switch (this) {
+      case DECIMAL_DOT_V1, DECIMAL_COMMA_V1 -> decimal(stripped, rowOrdinal);
+      case DATE_ISO_V1, DATE_DMY_V1 -> date(stripped, rowOrdinal);
       case IDENTITY -> value;
-      case DECIMAL_DOT_V1, DECIMAL_COMMA_V1 -> decimal(lexical(value, rowOrdinal), rowOrdinal);
-      case DATE_ISO_V1, DATE_DMY_V1 -> date(lexical(value, rowOrdinal), rowOrdinal);
     };
-  }
-
-  private static String lexical(Object value, long rowOrdinal) {
-    if (value instanceof String text) return text;
-    throw new InvalidValue(rowOrdinal);
   }
 
   private String decimal(String text, long rowOrdinal) {
