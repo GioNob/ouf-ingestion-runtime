@@ -84,13 +84,32 @@ components:
           enum: [AWAITING_START, BLOCKED, DISABLED, READY, PREFLIGHT, RUNNING, DRAINING, RETRY_WAIT, SUCCEEDED, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, PAUSED, ABORTED]
         recoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
         retryAt: {type: string, format: date-time, description: Persisted eligibility time for the next automatic action, subject to owner admission.}
+        decisionDeadline:
+          type: string
+          format: date-time
+          description: End of the minimum guaranteed window for the observed human decision, in ISO-8601 UTC. It is the earlier of the configured window from durable entry and any applicable owner deadlines. Its expiry does not transition the run.
         scheduleRecoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
         scheduleRetryAt: {type: string, format: date-time}
+        scheduleDecisionDeadline:
+          type: string
+          format: date-time
+          description: End of the owner window for the observed schedule review, in ISO-8601 UTC. It is based on durable pause or blocking incident evidence. Its expiry does not transition the schedule.
         udpHandoffConfirmed: {type: boolean, description: The completed run has at least one handoff and each has a persisted durable acknowledgement.}
         typeCode: {type: string, minLength: 1, description: Type pinned in the immutable configuration of a run with confirmed UDP handoff.}
         runId: {type: string, format: uuid, description: Governed run target for a human decision.}
         expectedVersion: {type: integer, minimum: 0}
-        reviewUrl: {type: string, format: uri, description: Version-bound HTTPS link to the authenticated task-50b run decision card, when its origin is configured.}
+      allOf:
+        - if:
+            properties:
+              recoveryAction: {enum: [HUMAN_RESUME_OR_ABORT, HUMAN_ABORT_REQUIRED, HUMAN_QUARANTINE_REVIEW, HUMAN_SCHEDULE_REVIEW]}
+          then: {required: [decisionDeadline]}
+          else: {not: {required: [decisionDeadline]}}
+        - if:
+            required: [scheduleRecoveryAction]
+            properties:
+              scheduleRecoveryAction: {const: HUMAN_SCHEDULE_REVIEW}
+          then: {required: [scheduleDecisionDeadline]}
+          else: {not: {required: [scheduleDecisionDeadline]}}
     IngestionRecoveryAction:
       type: string
       enum: [NONE, AUTOMATIC_RETRY, AUTOMATIC_RECONCILIATION, HUMAN_RESUME_OR_ABORT, HUMAN_ABORT_REQUIRED, HUMAN_QUARANTINE_REVIEW, HUMAN_SCHEDULE_REVIEW, WAITING_FOR_PUBLICATION_VERIFICATION, NEW_PUBLICATION_REQUIRED, TERMINAL]

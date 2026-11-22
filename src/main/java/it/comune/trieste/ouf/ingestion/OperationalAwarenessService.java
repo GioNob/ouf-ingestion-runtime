@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.ingestion;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,13 +11,15 @@ import org.springframework.stereotype.Service;
 /** Safe, bounded projection of persisted ingestion operational state for MCP/Gateway consumers. */
 @Service
 public class OperationalAwarenessService {
+  private static final String DEFAULT_HUMAN_DECISION_WINDOW = "PT24H";
   private final JdbcClient sql;
   private final OperationalRecovery recovery;
-  public OperationalAwarenessService(JdbcClient sql){this(sql,"");}
+  public OperationalAwarenessService(JdbcClient sql){this(sql,DEFAULT_HUMAN_DECISION_WINDOW);}
   @Autowired
-  public OperationalAwarenessService(JdbcClient sql,@Value("${ouf.ingestion.recovery.ths-origin:}") String thsOrigin){
+  public OperationalAwarenessService(JdbcClient sql,
+      @Value("${ouf.ingestion.recovery.human-decision-window:" + DEFAULT_HUMAN_DECISION_WINDOW + "}") String humanDecisionWindow){
     this.sql=sql;
-    this.recovery=new OperationalRecovery(thsOrigin);
+    this.recovery=new OperationalRecovery(Duration.parse(humanDecisionWindow));
   }
 
   public List<Map<String,Object>> status(String source,int limit,TrustedAuthorizationContext.Context actor){

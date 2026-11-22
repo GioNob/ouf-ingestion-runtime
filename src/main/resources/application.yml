@@ -38,4 +38,4 @@ ouf.ingestion.gateway-read:
   key-file: ${OUF_ING_GATEWAY_READ_KEY_FILE:}
 
 ouf.ingestion.recovery:
-  ths-origin: ${OUF_ING_RECOVERY_THS_ORIGIN:}
+  human-decision-window: ${OUF_ING_RECOVERY_HUMAN_DECISION_WINDOW:PT24H}

@@ -1,7 +1,7 @@
 package it.comune.trieste.ouf.ingestion;
 
-import java.net.URI;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -18,8 +18,10 @@ final class OperationalRecovery {
       acquisition.retry_at acquisition_retry_at, acquisition.reconciling lake_reconciling,
       delivery.retry_at delivery_retry_at, delivery.reconciling handoff_reconciling,
       s.state projected_schedule_state, s.activation_blocked schedule_blocked,
-      case when s.schedule_id is not null then %s end schedule_incident,
       schedule.retry_at schedule_retry_at,
+      coalesce(r.paused_at,r.created_at) run_paused_at, pause_budget.deadline run_budget_deadline,
+      incident.started_at schedule_incident_at,
+      s.paused_at schedule_paused_at,
       case when ack.confirmed then
         case when jsonb_typeof(snap.snapshot_json#>'{configuration,publishedBundle}')='object'
           then nullif(btrim(snap.snapshot_json#>>'{configuration,publishedBundle,semanticMapping,sourceType,typeCode}'),'')
@@ -37,6 +39,21 @@ final class OperationalRecovery {
       and g.run_id=r.run_id and g.state='ACTIVE'
     left join lateral (%s where r.state='PAUSED') f on true
     left join lateral (
+      select min(coalesce(blocked.paused_at,blocked.created_at)) started_at
+      %s and s.state='ACTIVE'
+    ) incident on true
+    left join lateral (
+      select least(
+        (select deadline_at from ouf_ingestion.run_recovery_session
+          where run_id=r.run_id and state='ACTIVE' and attempts<max_attempts),
+        (select min(%s) from ouf_ingestion.ing_partition p
+          where p.run_id=r.run_id and p.state='PAUSED' and %s and not f.handoff_recovery),
+        (select min(b.deadline) from ouf_ingestion.handoff_outbox h join ouf_ingestion.handoff_budget b using(handoff_id)
+          where h.run_id=r.run_id and h.state in ('READY','DELIVERING','FAILED_RETRYABLE')
+            and b.authorized and b.remaining>0 and %s and not (%s))
+      ) deadline where r.state='PAUSED'
+    ) pause_budget on true
+    left join lateral (
       select coalesce(greatest(case when p.retry_at is not null then %s end,p.lease_until),statement_timestamp()) retry_at,
         %s reconciling
       from ouf_ingestion.ing_partition p
@@ -46,7 +63,7 @@ final class OperationalRecovery {
         and (p.retry_at is not null or (p.retry_started_at is not null or p.lease_until<=statement_timestamp()) and %s)
         and not %s
         and (p.retry_started_at is null or not (%s) and greatest(%s,statement_timestamp(),p.lease_until)
-          < p.retry_started_at+interval '24 hours')
+          < %s)
         and (budget.allowed is null or budget.allowed and greatest(%s,statement_timestamp(),p.lease_until)<budget.deadline_at)
         and (r.publication_id is null or exists(select 1 from ouf_ingestion.ing_schedule s where %s))
       order by retry_at, p.partition_key limit 1
@@ -62,7 +79,7 @@ final class OperationalRecovery {
     ) delivery on true
     left join lateral (
       select greatest(s.next_run_at,s.lease_until,sh.retry_not_before,sh.circuit_open_until,sh.recovery_probe_until) retry_at
-      where %s and not %s and %s
+      where %s and incident.started_at is null and %s
         and (s.activation_failures>0 or r.admission_pending and r.state='PREFLIGHT' and g.session_id is not null
           or sh.retry_not_before>statement_timestamp() or sh.circuit_open_until>statement_timestamp())
         and (not s.trigger_once or s.publication_enabled and s.consumed_publication_id is distinct from s.publication_id
@@ -74,26 +91,28 @@ final class OperationalRecovery {
         and h.acked_at is not null) confirmed
       from ouf_ingestion.handoff_outbox h where h.run_id=r.run_id and r.state in ('SUCCEEDED','COMPLETED_WITH_WARNINGS')
     ) ack on true
-    """.formatted(SCHEDULE_INCIDENT, RESUME_FACTS, ACQUISITION_RETRY_AT, PENDING_LAKE_WRITE, SESSION_CAN_ATTEMPT, ACQUISITION_LANE,
-      PENDING_LAKE_WRITE, BLOCKED_LAKE_WRITE, PARTITION_EXHAUSTED, ACQUISITION_RETRY_AT, ACQUISITION_RETRY_AT, CURRENT_PUBLICATION,
+    """.formatted(RESUME_FACTS, SCHEDULE_BLOCKERS, PARTITION_DEADLINE, PARTITION_ATTEMPTS_LEFT,
+      DELIVERY_HEAD, DELIVERY_SUPERSEDED,
+      ACQUISITION_RETRY_AT, PENDING_LAKE_WRITE, SESSION_CAN_ATTEMPT, ACQUISITION_LANE,
+      PENDING_LAKE_WRITE, BLOCKED_LAKE_WRITE, PARTITION_EXHAUSTED, ACQUISITION_RETRY_AT, PARTITION_DEADLINE,
+      ACQUISITION_RETRY_AT, CURRENT_PUBLICATION,
       DELIVERY_RECONCILING, DELIVERY_LANE, DELIVERY_HEAD, DELIVERY_SUPERSEDED, DELIVERY_EXPIRED,
-      SCHEDULE_ACTIVE, SCHEDULE_INCIDENT, SCHEDULE_NO_ACTIVE_RUN, MANAGED_ATTEMPTS_LEFT, MANAGED_DEADLINE);
+      SCHEDULE_ACTIVE, SCHEDULE_NO_ACTIVE_RUN, MANAGED_ATTEMPTS_LEFT, MANAGED_DEADLINE);
 
   private static final List<String> INTERNAL_COLUMNS = List.of("tenant_id", "project_schedule", "persisted_state",
     "action_version", "admission_pending", "has_snapshot", "quarantine_not_ready", "handoff_recovery",
     "handoff_renewable", "publication_required", "publication_current", "publication_fresh", "acquisition_retry_at",
     "lake_reconciling", "delivery_retry_at", "handoff_reconciling", "projected_schedule_state", "schedule_blocked",
-    "schedule_incident", "schedule_retry_at", "pinned_type", "handoff_confirmed");
+    "schedule_incident_at", "schedule_retry_at", "run_paused_at", "run_budget_deadline",
+    "schedule_paused_at", "pinned_type", "handoff_confirmed");
 
-  private final URI thsOrigin;
+  private final Duration humanDecisionWindow;
 
-  OperationalRecovery(String origin) {
-    thsOrigin = origin.isBlank() ? null : URI.create(origin);
-    if (thsOrigin != null && (!"https".equals(thsOrigin.getScheme()) || thsOrigin.getHost()==null
-        || thsOrigin.getRawUserInfo()!=null || thsOrigin.getRawQuery()!=null || thsOrigin.getRawFragment()!=null
-        || !List.of("", "/").contains(thsOrigin.getRawPath()))) {
-      throw new IllegalArgumentException("ING_RECOVERY_THS_ORIGIN_INVALID");
+  OperationalRecovery(Duration humanDecisionWindow) {
+    if (humanDecisionWindow.isZero() || humanDecisionWindow.isNegative()) {
+      throw new IllegalArgumentException("ING_HUMAN_DECISION_WINDOW_INVALID");
     }
+    this.humanDecisionWindow = humanDecisionWindow;
   }
 
   Map<String,Object> project(Map<String,Object> row) {
@@ -109,24 +128,43 @@ final class OperationalRecovery {
       ? "COMPLETED" : row.get("run_state"));
     row.put("recoveryAction",recovery.action().name());
     if (recovery.retryAt() != null) row.put("retryAt",recovery.retryAt().toString());
+    Instant scheduleDeadline = schedule == RecoveryAction.HUMAN_SCHEDULE_REVIEW
+      ? scheduleDeadline(row) : null;
+    if (recovery.action().requiresHuman()) {
+      Instant deadline = state == null ? scheduleDeadline : runDeadline(row,recovery.action());
+      row.put("decisionDeadline",deadline.toString());
+    }
     if (row.get("projected_schedule_state") != null) {
       row.put("scheduleRecoveryAction",schedule.name());
       if (scheduleRetryAt != null && schedule == RecoveryAction.AUTOMATIC_RETRY) row.put("scheduleRetryAt",scheduleRetryAt.toString());
+      if (scheduleDeadline != null) row.put("scheduleDecisionDeadline",scheduleDeadline.toString());
     }
     if (state != null) row.put("udpHandoffConfirmed",confirmed);
     if (confirmed && typeCode != null) row.put("typeCode",typeCode);
     if (state == RecoveryAction.RunState.PAUSED) {
-      Object runId = row.get("job_ref");
-      long version = ((Number) row.get("action_version")).longValue();
-      row.put("runId",runId);
-      row.put("expectedVersion",version);
-      if (thsOrigin != null && version>=0 && version<=9007199254740991L) {
-        row.put("reviewUrl",thsOrigin.resolve("/trusted-human/ingestion-run-recovery/?runId="+runId
-          +"&expectedVersion="+version).toString());
-      }
+      row.put("runId",row.get("job_ref"));
+      row.put("expectedVersion",((Number) row.get("action_version")).longValue());
     }
     INTERNAL_COLUMNS.forEach(row::remove);
     return row;
+  }
+
+  private Instant runDeadline(Map<String,Object> row, RecoveryAction action) {
+    Instant windowEnd = instant(row.get("run_paused_at")).plus(humanDecisionWindow);
+    if (action == RecoveryAction.HUMAN_RESUME_OR_ABORT) {
+      // Discovery freshness is a precondition renewed by the activation loop, not an expiry of the decision.
+      return earlier(windowEnd,instant(row.get("run_budget_deadline")));
+    }
+    return windowEnd;
+  }
+
+  private Instant scheduleDeadline(Map<String,Object> row) {
+    String anchor = "PAUSED".equals(row.get("projected_schedule_state")) ? "schedule_paused_at" : "schedule_incident_at";
+    return instant(row.get(anchor)).plus(humanDecisionWindow);
+  }
+
+  private static Instant earlier(Instant first, Instant other) {
+    return other != null && other.isBefore(first) ? other : first;
   }
 
   private record Decision(RecoveryAction action, Instant retryAt) {
@@ -172,7 +210,7 @@ final class OperationalRecovery {
           ? RecoveryAction.NEW_PUBLICATION_REQUIRED : RecoveryAction.HUMAN_SCHEDULE_REVIEW;
       }
       case "ACTIVE" -> {
-        if (RecoveryAction.flag(row,"schedule_incident")) yield RecoveryAction.HUMAN_SCHEDULE_REVIEW;
+        if (row.get("schedule_incident_at") != null) yield RecoveryAction.HUMAN_SCHEDULE_REVIEW;
         yield row.get("schedule_retry_at") != null ? RecoveryAction.AUTOMATIC_RETRY : RecoveryAction.NONE;
       }
       default -> throw new IllegalStateException("ING_SCHEDULE_STATE_UNKNOWN");

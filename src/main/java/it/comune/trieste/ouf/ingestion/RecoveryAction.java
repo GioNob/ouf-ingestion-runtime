@@ -15,6 +15,10 @@ enum RecoveryAction {
   NEW_PUBLICATION_REQUIRED,
   TERMINAL;
 
+  boolean requiresHuman() {
+    return name().startsWith("HUMAN_");
+  }
+
   enum RunState {
     READY, PREFLIGHT, RUNNING, DRAINING, SUCCEEDED, COMPLETED_WITH_WARNINGS, FAILED, PAUSED, ABORTED;
 

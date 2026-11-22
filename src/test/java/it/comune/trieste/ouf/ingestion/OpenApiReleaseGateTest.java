@@ -15,4 +15,16 @@ class OpenApiReleaseGateTest {
     assertThat(internal).contains("/operations/status:","/operations/history:",
       "enum: ["+String.join(", ",Arrays.stream(RecoveryAction.values()).map(Enum::name).toList())+"]");
   }
+
+  @Test void operationalDeadlinesAreConditionalOnHumanActions() throws Exception {
+    String internal=Files.readString(Path.of("openapi/ingestion-internal-v1.yaml"));
+    var humanActions=Arrays.stream(RecoveryAction.values()).filter(RecoveryAction::requiresHuman).map(Enum::name).toList();
+    assertThat(internal).contains("recoveryAction: {enum: ["+String.join(", ",humanActions)+"]}",
+      "scheduleRecoveryAction: {const: HUMAN_SCHEDULE_REVIEW}", "required: [scheduleRecoveryAction]")
+      .doesNotContain("reviewUrl:");
+    for(String field:List.of("decisionDeadline","scheduleDecisionDeadline")) {
+      assertThat(internal).containsPattern(field+":\\R\\s+type: string\\R\\s+format: date-time")
+        .contains("then: {required: ["+field+"]}","else: {not: {required: ["+field+"]}}");
+    }
+  }
 }

@@ -8,7 +8,8 @@ final class RecoveryPredicates {
     s.schedule_id=r.schedule_id and s.tenant_id=r.tenant_id
     and s.publication_id=r.publication_id and s.publication_enabled
     """;
-  static final String FRESH_DISCOVERY = "s.discovery_verified_at>clock_timestamp()-interval '5 minutes'";
+  static final String DISCOVERY_VALID_UNTIL = "s.discovery_verified_at+interval '5 minutes'";
+  static final String FRESH_DISCOVERY = DISCOVERY_VALID_UNTIL + ">clock_timestamp()";
   static final String ADMISSION_PUBLICATION = CURRENT_PUBLICATION
     + " and s.consumed_publication_id is distinct from s.publication_id";
 
@@ -55,7 +56,9 @@ final class RecoveryPredicates {
     exists(select 1 from ouf_ingestion.lake_write_evidence e
       where e.run_id=p.run_id and e.partition_key=p.partition_key and %s)
     """.formatted(BLOCKED_LAKE_EFFECT);
-  static final String PARTITION_EXHAUSTED = "p.retry_attempts>=128 or p.retry_started_at+interval '24 hours'<=clock_timestamp()";
+  static final String PARTITION_ATTEMPTS_LEFT = "p.retry_attempts<" + RetryPolicy.ATTEMPTS;
+  static final String PARTITION_DEADLINE = "p.retry_started_at+interval '24 hours'";
+  static final String PARTITION_EXHAUSTED = "not (" + PARTITION_ATTEMPTS_LEFT + ") or " + PARTITION_DEADLINE + "<=clock_timestamp()";
   static final String SESSION_CAN_ATTEMPT = "state='ACTIVE' and attempts<max_attempts and deadline_at>clock_timestamp()";
 
   static final String DELIVERY_LANE = "r.state in ('RUNNING','DRAINING')";
@@ -79,8 +82,8 @@ final class RecoveryPredicates {
     not exists(select 1 from ouf_ingestion.ing_run r where r.source_id=s.source_id
       and (r.state in ('READY','RUNNING','DRAINING') or (r.state='PREFLIGHT' and r.schedule_id is distinct from s.schedule_id)))
     """;
-  static final String SCHEDULE_INCIDENT = """
-    exists(select 1 from ouf_ingestion.ing_run blocked
+  static final String SCHEDULE_BLOCKERS = """
+    from ouf_ingestion.ing_run blocked
       where blocked.source_id=s.source_id and blocked.tenant_id=s.tenant_id
         and blocked.state not in ('ABORTED','SUCCEEDED','COMPLETED_WITH_WARNINGS')
         and (blocked.failure_code in ('ING_RECOVERY_BUDGET_EXHAUSTED','ING_HANDOFF_BLOCKED','ING_LAKE_RECONCILE_REQUIRED')
@@ -88,8 +91,9 @@ final class RecoveryPredicates {
             where ledger.run_id=blocked.run_id and ledger.state='EXHAUSTED'))
           or exists(select 1 from ouf_ingestion.runtime_issue issue where issue.run_id=blocked.run_id
             and issue.issue_code='ING_RECOVERY_BUDGET_EXHAUSTED' and issue.status='OPEN'
-            and not (blocked.state='PREFLIGHT' and blocked.schedule_id=s.schedule_id))))
+            and not (blocked.state='PREFLIGHT' and blocked.schedule_id=s.schedule_id)))
     """;
+  static final String SCHEDULE_INCIDENT = "exists(select 1 " + SCHEDULE_BLOCKERS + ")";
   static final String MANAGED_ATTEMPTS_LEFT = """
     s.activation_failures < coalesce(g.max_attempts,
       (s.sync_profile#>>'{operationalPolicy,maxRetryAttempts}')::int+1,%d)
