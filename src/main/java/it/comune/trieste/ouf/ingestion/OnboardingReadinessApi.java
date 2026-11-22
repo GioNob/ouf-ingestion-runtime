@@ -57,4 +57,8 @@ public class OnboardingReadinessApi {
   ResponseEntity<Map<String,String>> invalidConfiguration(IllegalArgumentException failure){
     return problem(HttpStatus.UNPROCESSABLE_ENTITY,failure.getMessage());
   }
+  @ExceptionHandler(ConfiguredValueTransform.InvalidValue.class)
+  ResponseEntity<Map<String,Object>> invalidValue(ConfiguredValueTransform.InvalidValue failure){
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(Map.of("code",failure.getMessage(),"rowOrdinal",failure.rowOrdinal()));
+  }
 }

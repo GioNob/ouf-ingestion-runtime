@@ -47,6 +47,7 @@ jobs:
       OUF_ING_DB_USER: ouf_ingestion
       OUF_ING_DB_PASSWORD: ci-only-password
       AUTHORIZATION_PAIRWISE_ROOT: ${{ github.workspace }}/.pairwise/authorization
+      OUF_ONBOARDING_CHECKOUT: ${{ github.workspace }}/.pairwise/onboarding
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -54,6 +55,14 @@ jobs:
           repository: GioNob/ouf-source-onboarding
           ref: 0bf7a926e7a348a02f348e2444a020f135769a80
           path: .pairwise/authorization
+      - name: Read the current Onboarding value transform contract
+        uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: main
+          path: .pairwise/onboarding
+          sparse-checkout: src/main/java/it/comune/trieste/ouf/onboarding/application
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify and package

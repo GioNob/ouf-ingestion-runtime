@@ -6,14 +6,23 @@ import { createServer } from 'node:http';
 
 export const source = 'source-a';
 export const property = 'https://example.test/name';
+export const latitudeProperty = 'https://example.test/latitude';
 const tenant = 'tenant-a';
 const scope = 'ingestion.operations.read';
 const semantic = { semanticId: 'core', semanticVersion: '1', revisionId: randomUUID(), publicationSetId: randomUUID() };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const issuer = 'https://auth.test/realms/ouf';
 
-function publication(sequence, value) {
-  const csv = Buffer.from(`id;name\n${sequence};${value}\n`);
+function publication(sequence, value, latitude) {
+  const columns = ['id', 'name'];
+  const cells = [sequence, value];
+  const mappings = [{ sourceField: 'name', targetPropertyIri: property, transform: 'IDENTITY' }];
+  if (latitude !== undefined) {
+    columns.push('latitude');
+    cells.push(latitude);
+    mappings.push({ sourceField: 'latitude', targetPropertyIri: latitudeProperty, transform: 'DECIMAL_DOT_V1' });
+  }
+  const csv = Buffer.from(`${columns.join(';')}\n${cells.join(';')}\n`);
   const ref = `object://files/approved-${sequence}.csv`;
   const execution = {
     acquisitionMode: 'INTERNAL_MANAGED_CSV', adapterId: 'managed-tabular-v1', adapterRuntimeVersion: '1.0.0',
@@ -27,12 +36,12 @@ function publication(sequence, value) {
     createdFromOnboardingVersion: randomUUID(), syncProfile: {}, semanticRefs: ['core@1'],
     semanticReferenceBindings: [semantic],
     extractionProfile: { runtime: { execution, stagingRef: ref, contentHash: 'sha256:' + digest(csv), csvDelimiter: ';' },
-      projection: { PLACE: ['id', 'name'] } },
+      projection: { PLACE: columns } },
     semanticMapping: { sourceType: { sourceId: source, typeCode: 'PLACE' },
-      propertyMappings: [{ sourceField: 'name', targetPropertyIri: property, transform: 'IDENTITY' }] },
+      propertyMappings: mappings },
     sourceObjectIdentityPolicy: { strategy: 'NATIVE_KEY', sourceFields: ['id'] },
     changeRepresentationProfile: { mode: 'FULL_SNAPSHOT' },
-    dataAccessPolicies: [{ target: property, label: 'OPEN', scope: 'PROPERTY' }],
+    dataAccessPolicies: mappings.map(m => ({ target: m.targetPropertyIri, label: 'OPEN', scope: 'PROPERTY' })),
   };
   // PublishedActivation hashes sorted map keys, preserving array order.
   const sorted = (_, v) => v && typeof v === 'object' && !Array.isArray(v)
@@ -61,8 +70,8 @@ export async function startFixture(dir) {
   let current;
   const fixture = {
     deliveries: [], holdAck: false,
-    publish(sequence, value) {
-      current = publication(sequence, value);
+    publish(sequence, value, latitude) {
+      current = publication(sequence, value, latitude);
       return current.envelope.publicationId;
     },
   };

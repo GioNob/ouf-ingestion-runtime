@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { property, source, startFixture } from './predecessor-fixture.mjs';
+import { latitudeProperty, property, source, startFixture } from './predecessor-fixture.mjs';
 
 const exec = promisify(execFile);
 const [scratch, name] = process.argv.slice(2);
@@ -130,8 +130,9 @@ try {
   assert.deepEqual(upgradedHistory.slice(0, oldHistory.length), oldHistory, 'predecessor history changed');
   await verifyRead('status', [[first, baseline]]);
   fixture.holdAck = true;
-  const second = fixture.publish(2, 'Station');
+  const second = fixture.publish(2, 'Station', '45.6501234567890123450');
   const pending = await record(second, 'FAILED_RETRYABLE');
+  assert.equal(pending.payload_json.canonicalPayload[latitudeProperty], '45.650123456789012345');
   assert.equal(pending.last_error_code, 'ING_EXECUTION_GATEWAY_503');
   assert.equal(pending.attempts, 1);
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');

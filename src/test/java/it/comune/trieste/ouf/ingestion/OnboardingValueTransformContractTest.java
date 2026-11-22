@@ -1,0 +1,63 @@
+package it.comune.trieste.ouf.ingestion;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+
+class OnboardingValueTransformContractTest {
+  private static final String XSD = "http://www.w3.org/2001/XMLSchema#";
+
+  private static Map<String,String> contract() throws IOException {
+    return new ObjectMapper().readValue(Path.of("contracts/onboarding-value-transforms-v1.json").toFile(),
+        new TypeReference<Map<String,String>>() {});
+  }
+
+  @Test void runtimeImplementsEveryContractEntry() throws IOException {
+    var types = contract();
+    assertThat(types.keySet()).containsExactlyInAnyOrderElementsOf(
+        Arrays.stream(ConfiguredValueTransform.values()).map(Enum::name).toList());
+    record Example(String datatype, String cell, String expected) {}
+    for (var entry : types.entrySet()) {
+      var rule = ConfiguredValueTransform.resolve(entry.getKey());
+      var example = switch (rule) {
+        case IDENTITY -> new Example("string", " 012 ", " 012 ");
+        case DECIMAL_DOT_V1 -> new Example("decimal", "12.300", "12.3");
+        case DECIMAL_COMMA_V1 -> new Example("decimal", "12,300", "12.3");
+        case DATE_ISO_V1 -> new Example("date", "2024-02-29", "2024-02-29");
+        case DATE_DMY_V1 -> new Example("date", "29/02/2024", "2024-02-29");
+      };
+      assertThat(entry.getValue()).as(entry.getKey()).isEqualTo(XSD + example.datatype());
+      assertThat(rule.apply(example.cell(), 1)).as(entry.getKey()).isEqualTo(example.expected());
+    }
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "OUF_ONBOARDING_CHECKOUT", matches = ".+")
+  void contractEqualsOwnerDatatypes() throws IOException {
+    Path source = Path.of(System.getenv("OUF_ONBOARDING_CHECKOUT"),
+        "src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileExecutionProposal.java");
+    var declaration = Pattern.compile("\\bDATATYPES\\s*=\\s*Map\\.of\\s*\\(([^;]*)\\)\\s*;")
+        .matcher(Files.readString(source));
+    assertThat(declaration.find()).as("Onboarding DATATYPES initializer").isTrue();
+    String[] literals = declaration.group(1).strip().split("\\s*,\\s*", -1);
+    assertThat(literals.length % 2).isZero();
+    var owner = new LinkedHashMap<String,String>();
+    for (int i = 0; i < literals.length; i += 2) {
+      assertThat(literals[i]).matches("\"[A-Za-z0-9_]+\"");
+      assertThat(literals[i + 1]).matches("\"[A-Za-z0-9_]+\"");
+      String rule = literals[i].substring(1, literals[i].length() - 1);
+      String datatype = literals[i + 1].substring(1, literals[i + 1].length() - 1);
+      assertThat(owner.put(rule, XSD + datatype)).isNull();
+    }
+    assertThat(owner).isEqualTo(contract());
+  }
+}
