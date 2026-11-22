@@ -22,8 +22,13 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name="ouf.ingestion.execution.enabled",havingValue="true")
 public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,RuntimePorts.GatewaySourcePort,RuntimePorts.DataLakePort,RuntimePorts.DurableHandoffPort {
   private final ObjectMapper json;private final RunExecutionRepository runs;private final URI gateway;private final Path token;private final HttpClient http;
-  public ExecutionGatewayClient(ObjectMapper json,RunExecutionRepository runs,@Value("${ouf.ingestion.activation.gateway-url}") String url,@Value("${ouf.ingestion.activation.token-file}") String token){
-    this.json=json;this.runs=runs;this.gateway=URI.create(url);this.token=Path.of(token);
+  private final GatewayPacing pacing;
+  ExecutionGatewayClient(ObjectMapper json,RunExecutionRepository runs,String url,String token){
+    this(json,runs,url,token,new GatewayPacing(key->null));
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  public ExecutionGatewayClient(ObjectMapper json,RunExecutionRepository runs,@Value("${ouf.ingestion.activation.gateway-url}") String url,@Value("${ouf.ingestion.activation.token-file}") String token,GatewayPacing pacing){
+    this.pacing=pacing;this.json=json;this.runs=runs;this.gateway=URI.create(url);this.token=Path.of(token);
     if(!Set.of("http","https").contains(gateway.getScheme())||gateway.getHost()==null||gateway.getUserInfo()!=null||gateway.getQuery()!=null||gateway.getFragment()!=null||!Set.of("","/").contains(gateway.getPath()))throw new IllegalArgumentException("ING_EXECUTION_GATEWAY_INVALID");
     http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).followRedirects(HttpClient.Redirect.NEVER).build();
   }
@@ -70,17 +75,19 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
   private static final String LAKE_PATH="/api/internal/v1/lake/objects";
   private byte[] exchange(String path,Object body,int limit,int expected){
     boolean lake=LAKE_PATH.equals(path);
+    GatewayPacing.Lane lane=lake?pacing.lake:"/api/internal/v1/handoffs".equals(path)?pacing.handoff:null;
     HttpRequest request;
     try {
       var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(10))
-          .header("Authorization","Bearer "+WorkloadTokenFile.read(token)).header("X-Correlation-ID",UUID.randomUUID().toString());
+          .header("X-Correlation-ID",UUID.randomUUID().toString());
       if(body==null)builder.GET();
       else {
         byte[] encoded=json.writeValueAsBytes(body);
         if(encoded.length>10_485_760)throw failure("ING_EXECUTION_REQUEST_TOO_LARGE",AdapterSpi.ErrorClass.CONFIGURATION);
         builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(encoded));
       }
-      request=builder.build();
+      if(lane!=null)lane.acquire();
+      request=builder.header("Authorization","Bearer "+WorkloadTokenFile.read(token)).build();
     }catch(IOException invalid){throw failure("ING_EXECUTION_SERIALIZATION_FAILED",AdapterSpi.ErrorClass.CONFIGURATION);}
      catch(RuntimePorts.GatewayFailure classified){throw classified;}
      catch(RuntimeException invalid){throw failure("ING_EXECUTION_REQUEST_INVALID",AdapterSpi.ErrorClass.CONFIGURATION);}
@@ -98,9 +105,9 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
       pending.cancel(true);
       for(Throwable cause=e;cause!=null;cause=cause.getCause()){
         if(cause instanceof HttpConnectTimeoutException || cause instanceof ConnectException || cause instanceof UnknownHostException)
-          throw failure("ING_EXECUTION_CONNECT_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+          throw new RuntimePorts.GatewayFailure("ING_EXECUTION_CONNECT_FAILED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(lane,GatewayPacing.NO_HEADERS));
         if(cause instanceof HttpTimeoutException || cause instanceof TimeoutException)
-          throw failure(lake?"ING_LAKE_RESPONSE_TIMEOUT":"ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+          throw new RuntimePorts.GatewayFailure(lake?"ING_LAKE_RESPONSE_TIMEOUT":"ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(lane,GatewayPacing.NO_HEADERS));
         if(cause instanceof IOException && "ING_RESPONSE_LIMIT".equals(cause.getMessage()))
           throw failure("ING_RESPONSE_LIMIT",lake?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION);
         if(cause instanceof javax.net.ssl.SSLHandshakeException)
@@ -108,16 +115,18 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
       }
       if(lake && !(e.getCause() instanceof IOException))
         throw failure("ING_LAKE_OUTCOME_UNKNOWN",AdapterSpi.ErrorClass.CONFIGURATION);
-      throw failure(lake?"ING_LAKE_TRANSPORT_UNCONFIRMED":"ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+      throw new RuntimePorts.GatewayFailure(lake?"ING_LAKE_TRANSPORT_UNCONFIRMED":"ING_EXECUTION_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(lane,GatewayPacing.NO_HEADERS));
     }
     int status=response.statusCode();
+    boolean retry=(lake && status==408) || status==429 || status==502 || status==503 || status==504 ||
+      (status==202 && "/api/internal/v1/handoffs".equals(path));
+    if(lane!=null && !retry)lane.observeQuota(response.headers());
     if(status!=expected){
       if(lake && status>=500 && duplicateNotUsable(response.body()))
         throw failure("ING_LAKE_OBJECT_UNUSABLE",AdapterSpi.ErrorClass.CONFIGURATION);
-      boolean retry=(lake && status==408) || status==429 || status==502 || status==503 || status==504 ||
-        (status==202 && "/api/internal/v1/handoffs".equals(path));
       var type=retry?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:status==401||status==403?AdapterSpi.ErrorClass.AUTH_ROUTE:AdapterSpi.ErrorClass.CONFIGURATION;
-      throw new RuntimePorts.GatewayFailure("ING_EXECUTION_GATEWAY_"+status,type,retry?RetryPolicy.retryAfter(response.headers()):null);
+      Duration wait=retry?pacing.retryDelay(lane,response.headers()):null;
+      throw new RuntimePorts.GatewayFailure("ING_EXECUTION_GATEWAY_"+status,type,wait);
     }
     return response.body();
   }

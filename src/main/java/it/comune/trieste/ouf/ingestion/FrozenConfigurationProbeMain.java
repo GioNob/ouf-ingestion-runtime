@@ -13,12 +13,13 @@ public final class FrozenConfigurationProbeMain {
       Properties properties=new Properties();
       try(Reader in=Files.newBufferedReader(Path.of(args[1]))){properties.load(in);}
       String url=required(properties,"ouf.ingestion.activation.gateway-url"),token=required(properties,"ouf.ingestion.activation.token-file"),tenant=required(properties,"ouf.ingestion.activation.tenant-id");
-      byte[] input=System.in.readNBytes(2_097_153);
-      if(input.length==0||input.length>2_097_152)throw new IllegalArgumentException("ING_COMPAT_INPUT_SIZE_INVALID");
+      byte[] input=System.in.readNBytes(3_145_729);
+      if(input.length==0||input.length>3_145_728)throw new IllegalArgumentException("ING_COMPAT_INPUT_SIZE_INVALID");
       var json=new ObjectMapper();
       @SuppressWarnings("unchecked") Map<String,Object> candidate=json.readValue(input,Map.class);
-      var objects=new ExecutionGatewayClient(json,null,url,token);
-      var semantics=new PublicationGatewayClient(json,url,token,tenant);
+      var pacing=new GatewayPacing(properties::getProperty);
+      var objects=new ExecutionGatewayClient(json,null,url,token,pacing);
+      var semantics=new PublicationGatewayClient(json,url,token,tenant,pacing);
       System.out.println(json.writeValueAsString(new FrozenConfigurationProbe(json,objects,semantics).probe(candidate)));
     }catch(Exception error){
       String code=error.getMessage();

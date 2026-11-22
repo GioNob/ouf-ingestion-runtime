@@ -147,7 +147,8 @@ try {
 
   await start('new');
   const upgradedHistory = await history('new');
-  assert.deepEqual(upgradedHistory.slice(0, oldHistory.length), oldHistory, 'predecessor history changed');
+  assert.deepEqual(upgradedHistory, oldHistory, 'task-51b must preserve the deployed V23 schema');
+  assert.equal(oldHistory.at(-1).version, '23');
   await verifyRead('status', [[first, baseline]], true);
   await verifyRead('history', [[first, baseline]], true);
   fixture.holdAck = true;
@@ -161,6 +162,7 @@ try {
   assert.equal(pending.last_error_code, 'ING_EXECUTION_GATEWAY_503');
   assert.equal(pending.attempts, 1);
   assert.equal(fixture.reconciledWrite, true);
+  assert.ok(fixture.referenceBatches >= 2, 'candidate must verify pins before processing and on retry');
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');
   assert.ok(pending.idempotency_key);
   const [recovering] = await fixture.read(base, 'status');
@@ -211,6 +213,7 @@ try {
   const [predecessorPause] = await fixture.read(base, 'status');
   assert.equal(predecessorPause.job_ref, held.run_id);
   assert.equal(predecessorPause.run_state, 'PAUSED');
+  assert.equal(Date.parse(predecessorPause.decisionDeadline), Number(expectedDeadlineMs));
   await docker('stop', '-t', '35', running);
   await start('new', true);
   let firstDeadline;

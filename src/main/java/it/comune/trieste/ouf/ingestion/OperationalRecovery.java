@@ -12,6 +12,9 @@ import static it.comune.trieste.ouf.ingestion.RecoveryPredicates.*;
 final class OperationalRecovery {
   static final String SELECT = """
     select page.*, l.lake_cause_code, coalesce(l.lake_next_action,'NONE') lake_next_action,
+      (ref.detail_json->>'index')::int reference_index, ref.detail_json->>'semanticId' reference_semantic_id,
+      ref.detail_json->>'revisionId' reference_revision_id, ref.detail_json->>'code' reference_code,
+      case when r.state='RUNNING' and page.run_state='RETRY_WAIT' then sh.consecutive_failures end retry_streak,
       r.state persisted_state, r.control_version action_version, r.admission_pending,
       f.has_snapshot, f.quarantine_not_ready, f.handoff_recovery, f.handoff_renewable,
       f.publication_required, f.publication_current, f.publication_fresh,
@@ -27,9 +30,20 @@ final class OperationalRecovery {
           then nullif(btrim(snap.snapshot_json#>>'{configuration,publishedBundle,semanticMapping,sourceType,typeCode}'),'')
           else nullif(btrim(snap.snapshot_json#>>'{configuration,typeCode}'),'') end
       end pinned_type,
+      (select string_agg(c.value->>'classIri',' ' order by c.ordinality)
+         from jsonb_array_elements(case when jsonb_typeof(snap.snapshot_json#>'{configuration,publishedBundle,semanticMapping,targetClasses}')='array'
+           then snap.snapshot_json#>'{configuration,publishedBundle,semanticMapping,targetClasses}' else '[]'::jsonb end)
+           with ordinality c(value,ordinality)
+         where jsonb_typeof(c.value->'classIri')='string') canonical_types,
       coalesce(ack.confirmed,false) handoff_confirmed
     from page
     left join ouf_ingestion.ing_run r on r.run_id=page.job_ref and r.tenant_id=page.tenant_id
+    left join lateral (
+      select e.detail_json from ouf_ingestion.operational_event e
+      where r.failure_code is not null
+        and e.correlation_id=r.correlation_id and e.run_id=r.run_id and e.event_type='SEMANTIC_REFERENCE_FAILURE'
+        and e.error_code=r.failure_code and e.occurred_at=r.updated_at order by e.occurred_at desc,e.event_id desc limit 1
+    ) ref on true
     left join ouf_ingestion.run_lake_recovery l on l.run_id=r.run_id
     left join ouf_ingestion.runtime_configuration_snapshot snap on snap.run_id=r.run_id
     left join ouf_ingestion.ing_schedule s on page.project_schedule and s.tenant_id=page.tenant_id
@@ -141,9 +155,25 @@ final class OperationalRecovery {
     }
     if (state != null) row.put("udpHandoffConfirmed",confirmed);
     if (confirmed && typeCode != null) row.put("typeCode",typeCode);
+    // semanticMapping.targetClasses[].classIri of the run's pinned bundle (IRIs contain no whitespace).
+    if (row.remove("canonical_types") instanceof String joined && !joined.isBlank()) {
+      var types=List.of(joined.trim().split(" "));
+      row.put("canonicalTypes",types);
+      if (types.size()==1) row.put("canonicalType",types.get(0));
+    }
     if (state == RecoveryAction.RunState.PAUSED) {
       row.put("runId",row.get("job_ref"));
       row.put("expectedVersion",((Number) row.get("action_version")).longValue());
+    }
+    Object streak=row.remove("retry_streak");
+    if(streak!=null && row.containsKey("consecutive_failures"))row.put("consecutive_failures",streak);
+    Object index=row.remove("reference_index"), id=row.remove("reference_semantic_id"), revision=row.remove("reference_revision_id");
+    Object code=row.remove("reference_code");
+    if(index!=null){
+      var detail=new java.util.LinkedHashMap<String,Object>();
+      detail.put("index",index);detail.put("semanticId",id);detail.put("revisionId",revision);
+      if(code!=null)detail.put("code",code);
+      row.put("semanticReference",detail);
     }
     INTERNAL_COLUMNS.forEach(row::remove);
     return row;

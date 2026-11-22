@@ -53,6 +53,14 @@ public class OnboardingReadinessApi {
       default -> HttpStatus.UNPROCESSABLE_ENTITY;
     },failure.safeCode());
   }
+  @ExceptionHandler(ValuePins.BindingFailure.class)
+  ResponseEntity<Map<String,Object>> invalidReference(ValuePins.BindingFailure failure){
+    var pin=failure.detail();
+    var problem=new LinkedHashMap<>(pin);
+    problem.put("code",failure.getMessage());
+    problem.put("semanticReference",pin);
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(problem);
+  }
   @ExceptionHandler(IllegalArgumentException.class)
   ResponseEntity<Map<String,String>> invalidConfiguration(IllegalArgumentException failure){
     return problem(HttpStatus.UNPROCESSABLE_ENTITY,failure.getMessage());

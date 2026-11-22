@@ -5,8 +5,6 @@ import java.io.*;
 import java.net.*;
 import java.net.http.*;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -19,18 +17,23 @@ import org.springframework.stereotype.Service;
 @Service
 @ConditionalOnProperty(name="ouf.ingestion.gateway.base-url")
 public final class HttpGatewaySourceClient implements RuntimePorts.GatewaySourcePort {
-  private final HttpClient http;private final URI endpoint;private final ObjectMapper json;private final Duration requestTimeout;private final int maxResponseBytes;private final Clock clock;
+  private final HttpClient http;private final URI endpoint;private final ObjectMapper json;private final Duration requestTimeout;private final int maxResponseBytes;private final GatewayPacing pacing;
 
+  public HttpGatewaySourceClient(ObjectMapper json,String endpoint,long connectTimeoutMs,long requestTimeoutMs,int maxResponseBytes){
+    this(json,endpoint,connectTimeoutMs,requestTimeoutMs,maxResponseBytes,new GatewayPacing(key->null));
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
   public HttpGatewaySourceClient(ObjectMapper json,
       @Value("${ouf.ingestion.gateway.base-url}") String endpoint,
       @Value("${ouf.ingestion.gateway.connect-timeout-ms:5000}") long connectTimeoutMs,
       @Value("${ouf.ingestion.gateway.request-timeout-ms:30000}") long requestTimeoutMs,
-      @Value("${ouf.ingestion.gateway.max-response-bytes:50000000}") int maxResponseBytes){
-    this(HttpClient.newBuilder().connectTimeout(positive(connectTimeoutMs,"ING_GATEWAY_CONNECT_TIMEOUT_INVALID")).followRedirects(HttpClient.Redirect.NEVER).build(),uri(endpoint),json,positive(requestTimeoutMs,"ING_GATEWAY_REQUEST_TIMEOUT_INVALID"),maxResponseBytes,Clock.systemUTC());
+      @Value("${ouf.ingestion.gateway.max-response-bytes:50000000}") int maxResponseBytes,GatewayPacing pacing){
+    this(HttpClient.newBuilder().connectTimeout(positive(connectTimeoutMs,"ING_GATEWAY_CONNECT_TIMEOUT_INVALID")).followRedirects(HttpClient.Redirect.NEVER).build(),uri(endpoint),json,positive(requestTimeoutMs,"ING_GATEWAY_REQUEST_TIMEOUT_INVALID"),maxResponseBytes,pacing);
   }
 
-  HttpGatewaySourceClient(HttpClient http,URI endpoint,ObjectMapper json,Duration requestTimeout,int maxResponseBytes,Clock clock){
-    this.http=Objects.requireNonNull(http);this.endpoint=validate(endpoint);this.json=Objects.requireNonNull(json);this.requestTimeout=Objects.requireNonNull(requestTimeout);this.clock=Objects.requireNonNull(clock);
+  HttpGatewaySourceClient(HttpClient http,URI endpoint,ObjectMapper json,Duration requestTimeout,int maxResponseBytes,GatewayPacing pacing){
+    this.http=Objects.requireNonNull(http);this.endpoint=validate(endpoint);this.json=Objects.requireNonNull(json);this.requestTimeout=Objects.requireNonNull(requestTimeout);this.pacing=Objects.requireNonNull(pacing);
     if(requestTimeout.isZero()||requestTimeout.isNegative())throw new IllegalArgumentException("ING_GATEWAY_REQUEST_TIMEOUT_INVALID");
     if(maxResponseBytes<1)throw new IllegalArgumentException("ING_GATEWAY_MAX_RESPONSE_INVALID");this.maxResponseBytes=maxResponseBytes;
   }
@@ -48,20 +51,13 @@ public final class HttpGatewaySourceClient implements RuntimePorts.GatewaySource
         if(status>=200&&status<300)return bytes;
       }
       throw classified(status,response.headers());
-    }catch(RuntimePorts.GatewayFailure e){throw e;}catch(HttpTimeoutException|ConnectException e){throw failure("ING_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);}catch(InterruptedException e){Thread.currentThread().interrupt();throw failure("ING_GATEWAY_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);}catch(IOException e){throw failure("ING_GATEWAY_IO_FAILURE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);}
+    }catch(RuntimePorts.GatewayFailure e){throw e;}catch(HttpTimeoutException|ConnectException e){throw failure("ING_GATEWAY_UNAVAILABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(null,GatewayPacing.NO_HEADERS));}catch(InterruptedException e){Thread.currentThread().interrupt();throw failure("ING_GATEWAY_INTERRUPTED",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);}catch(IOException e){throw failure("ING_GATEWAY_IO_FAILURE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(null,GatewayPacing.NO_HEADERS));}
   }
 
   private RuntimePorts.GatewayFailure classified(int status,HttpHeaders headers){
-    if(status==429)return failure("ING_GATEWAY_429",AdapterSpi.ErrorClass.TRANSIENT_SOURCE,retryAfter(headers).orElse(null));
-    if(status==408||status>=500)return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.TRANSIENT_SOURCE,null);
+    if(status==408||status==429||status>=500)return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.TRANSIENT_SOURCE,pacing.retryDelay(null,headers));
     if(status==401||status==403)return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.AUTH_ROUTE,null);
     return failure("ING_GATEWAY_"+status,AdapterSpi.ErrorClass.CONFIGURATION,null);
-  }
-
-  private Optional<Duration> retryAfter(HttpHeaders headers){
-    Optional<String> value=headers.firstValue("Retry-After");if(value.isEmpty()||value.orElseThrow().isBlank())return Optional.empty();String raw=value.orElseThrow().strip();
-    try{long seconds=Long.parseLong(raw);return seconds>0?Optional.of(Duration.ofSeconds(seconds)):Optional.empty();}catch(NumberFormatException ignored){}
-    try{Instant at=ZonedDateTime.parse(raw,DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();long seconds=ChronoUnit.SECONDS.between(clock.instant(),at);return seconds>0?Optional.of(Duration.ofSeconds(seconds)):Optional.empty();}catch(Exception ignored){return Optional.empty();}
   }
 
   private static RuntimePorts.GatewayFailure failure(String code,AdapterSpi.ErrorClass type,Duration retry){return new RuntimePorts.GatewayFailure(code,type,retry);}

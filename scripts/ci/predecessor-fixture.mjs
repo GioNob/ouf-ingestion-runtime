@@ -87,7 +87,7 @@ export async function startFixture(dir) {
   }
   let current;
   const fixture = {
-    deliveries: [], deliveryBodies: [], rawObjects: new Map(), holdAck: false, dropLakeReceipt: false, droppedWrite: null, reconciledWrite: false,
+    referenceBatches: 0, deliveries: [], deliveryBodies: [], rawObjects: new Map(), holdAck: false, dropLakeReceipt: false, droppedWrite: null, reconciledWrite: false,
     publish(sequence, value, latitude) {
       current = publication(sequence, value, latitude);
       return current.envelope.publicationId;
@@ -122,6 +122,17 @@ export async function startFixture(dir) {
         for await (const chunk of req) chunks.push(chunk);
         const bodyText = Buffer.concat(chunks).toString('utf8');
         const body = JSON.parse(bodyText);
+        if (url.pathname === '/api/semantic/v1/references:resolve-batch') {
+          const pins = current.envelope.bundle.semanticReferenceBindings;
+          assert.deepEqual(body.references, pins.map(({ semanticId, revisionId, publicationSetId }) => ({ semanticId, revisionId, publicationSetId })));
+          fixture.referenceBatches++;
+          return reply(200, { contract: 'ouf.semantic.reference-batch.v1', registryVersion: 'fixture-v1',
+            results: pins.map((pin, index) => ({ ...body.references[index], index, outcome: 'RESOLVED', resolved: {
+              semantic_id: pin.semanticId, semantic_version: pin.semanticVersion, revision_id: pin.revisionId,
+              publication_set_id: pin.publicationSetId, status: 'ACTIVE', artifact_type: pin === map ? 'VALUE_MAP' : 'PROPERTY',
+              content_hash: 'fixture', publication_checksum: 'fixture', ...(pin === map && { definitionSha256: pin.definitionSha256 }),
+            } })) });
+        }
         if (url.pathname === '/api/internal/v1/lake/objects') {
           const content = Buffer.from(body.contentBase64, 'base64');
           const hash = 'sha256:' + digest(content);

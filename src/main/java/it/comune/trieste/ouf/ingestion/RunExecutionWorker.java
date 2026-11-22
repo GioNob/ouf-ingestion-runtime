@@ -77,7 +77,7 @@ public final class RunExecutionWorker {
         log(waiting?"INGESTION_RETRY_WAIT":"INGESTION_RUN_PAUSED",claim,context,cause.code());
       }else{
         health.recordFailure(context.sourceId(),cause.code(),cause.errorClass(),cause.retryAfter());
-        runs.pause(claim,cause.code());log("INGESTION_RUN_PAUSED",claim,context,cause.code());
+        runs.pause(claim,cause);log("INGESTION_RUN_PAUSED",claim,context,cause.code());
       }
     }
     return Optional.of(claim.runId());
