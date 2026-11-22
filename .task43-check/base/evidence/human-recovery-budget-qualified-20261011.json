@@ -1,0 +1,235 @@
+{
+  "schema": "ouf.platform-human-recovery-budget-qualification.v1",
+  "date": "2026-10-11",
+  "policyVersion": 2,
+  "policy": "https://github.com/GioNob/ouf-deploy/blob/main/docs/OUF_RESILIENCE_POLICY.md",
+  "sourceCommit": "80bcb2f8c1f478c0b6d18c46b9eeff5cede5f68f",
+  "mergedCommit": "6f583ca6b226a63c4a9b55df19f28728c4fd9348",
+  "pullRequest": 34,
+  "pullRequestMerged": true,
+  "qualification": {
+    "runId": 38104209271,
+    "jobId": 114366142916,
+    "tests": 35,
+    "newPolicyTests": 16,
+    "conclusion": "SUCCESS",
+    "postgres": "17",
+    "java": "21",
+    "sdkConformanceTests": 10
+  },
+  "moduleQualification": {
+    "runId": 38104209251,
+    "tests": 134,
+    "failures": 0,
+    "errors": 0,
+    "jobs": [
+      {
+        "id": 114366143054,
+        "name": "java21-postgresql17",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 114366143150,
+        "name": "supply-chain-deployment",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 114366143201,
+        "name": "disaster-recovery-drill",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "conclusion": "SUCCESS"
+  },
+  "allCandidateRuns": [
+    {
+      "id": 38104211377,
+      "name": "R4a frozen configuration consumer probe",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211379,
+      "name": "R2b source to authorized serving",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211410,
+      "name": "Ingestion Runtime module CI",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211339,
+      "name": "Retained live source continuity",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211331,
+      "name": "Shared Authorization SDK pairwise",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211341,
+      "name": "R2a Onboarding automatic activation",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211338,
+      "name": "R2e GeoPackage features and governed camera-cabinet relations",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104211346,
+      "name": "R2c governed publication to historical serving",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209261,
+      "name": "Retained live source continuity",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209266,
+      "name": "R4a frozen configuration consumer probe",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209262,
+      "name": "Shared Authorization SDK pairwise",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209271,
+      "name": "HUMAN recovery budget and fencing qualification",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209263,
+      "name": "R2a Onboarding automatic activation",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209285,
+      "name": "R2b source to authorized serving",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209255,
+      "name": "R2e GeoPackage features and governed camera-cabinet relations",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209251,
+      "name": "Ingestion Runtime module CI",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 38104209297,
+      "name": "R2c governed publication to historical serving",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "priorFailure": {
+    "runId": 38104025072,
+    "source": "f151f314db6def1d7344c6985c9682525bd957b0",
+    "reason": "TEST_JDBC_NAMED_PARAMETER_PARSER_REJECTED_POSTGRES_JSON_QUESTION_OPERATOR",
+    "productionBehaviorChangedByFix": false,
+    "correctedRun": 38104163969,
+    "correctedConclusion": "SUCCESS"
+  },
+  "operationProfile": {
+    "ref": "ouf.run-recovery-batch.v1",
+    "unit": "OWNED_EXECUTION_WORKER_BATCH",
+    "maxAttemptsDefault": 128,
+    "maxElapsedSecondsDefault": 86400,
+    "batchRecordLimit": 100,
+    "batchLoopSeconds": 45,
+    "oneOwnedRecoveryBatchAtATime": true,
+    "notEveryDownstreamHttpRetry": true,
+    "customFiniteLimitsAllowed": true
+  },
+  "proven": [
+    "HUMAN_NEW_BUDGET_AFTER_EXHAUSTION_PRESERVES_HISTORY",
+    "CONCURRENT_HUMAN_COMMANDS_ONE_SESSION",
+    "STALE_PARTITION_CLAIM_FENCED",
+    "CUMULATIVE_COUNTS_AND_ONE_OPEN_ISSUE",
+    "RESTART_DOES_NOT_RESET_SESSION_OR_DEADLINE",
+    "LATE_REMOTE_RESULT_CANNOT_STAGE_OR_ADVANCE_CHECKPOINT",
+    "HUMAN_CAPABILITY_TENANT_AND_PREFLIGHT_DENIALS",
+    "IMMUTABLE_HISTORY_LIMITS_AND_COUNTERS",
+    "ADMISSION_PRESSURE_NOT_BYPASSED",
+    "SCHEDULER_CANNOT_CREATE_NEW_RUN_AROUND_EXHAUSTED_INCIDENT",
+    "LAST_INFLIGHT_BATCH_NOT_PREMATURELY_INVALIDATED",
+    "UNCLAIMED_LEGACY_PUBLICATION_CANNOT_BYPASS_RECOVERY",
+    "INDEPENDENT_RUN_CONTINUES",
+    "INCIDENT_RESOLVES_ONLY_AFTER_HANDOFF_ACK_AND_DRAIN"
+  ],
+  "implementationScope": "EXISTING_HUMAN_ORIGINAL_RUN_RESUME_AND_OWNED_EXECUTION_PATH",
+  "migration": "V15__human_recovery_sessions.sql",
+  "migrationAdditive": true,
+  "targetMigrationApplied": false,
+  "vpsActions": 0,
+  "r10Touched": false,
+  "r9OrR10ReplayPermitted": false,
+  "previousRootPreflightSuspended": true,
+  "notReleaseAcceptance": true,
+  "allRuntimesConform": false,
+  "remaining": [
+    "Initial-run/source/publication-activation finite incident budgets",
+    "Full automatic transient retry integration in execution worker",
+    "Separate downstream dispatcher and historical replay budgets",
+    "Shared dependency circuit isolation and monitored multi-run quotas",
+    "Quarantine capacity/retention/backpressure and complete operator THS/MCP surfaces",
+    "Full resilient target lease owner/source/command/OCI/peer authority closure",
+    "Transport deadline and outage/load/fault qualification beyond this scope"
+  ],
+  "nativeLogSummary": [
+    "2026-10-11T02:09:50.6290792Z [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.094 s -- in it.comune.trieste.ouf.authorization.CommonConformanceTest",
+    "2026-10-11T02:09:50.6799371Z [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.051 s -- in it.comune.trieste.ouf.authorization.OwnerAuthorizationTest",
+    "2026-10-11T02:10:08.5083741Z [INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.751 s -- in it.comune.trieste.ouf.ingestion.RunControlRuntimeTest",
+    "2026-10-11T02:10:08.5370359Z [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.027 s -- in it.comune.trieste.ouf.ingestion.OpenApiReleaseGateTest",
+    "2026-10-11T02:10:12.9347982Z [INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.436 s -- in it.comune.trieste.ouf.ingestion.HumanRecoveryBudgetRuntimeTest",
+    "2026-10-11T02:10:14.3968814Z [INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.477 s -- in it.comune.trieste.ouf.ingestion.RunExecutionWorkerRuntimeTest",
+    "2026-10-11T02:10:14.4026375Z [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in it.comune.trieste.ouf.ingestion.TrustedHumanOpenApiTest",
+    "2026-10-11T02:10:14.4640386Z [INFO] Tests run: 35, Failures: 0, Errors: 0, Skipped: 0"
+  ],
+  "moduleLogSummary": [
+    "2026-10-11T02:11:29.6762022Z [INFO] Tests run: 134, Failures: 0, Errors: 0, Skipped: 0"
+  ]
+}

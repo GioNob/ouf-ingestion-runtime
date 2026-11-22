@@ -40,18 +40,33 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   if(reference==null||reference.isBlank()||reference.length()>2048)throw new IllegalArgumentException("ING_HISTORICAL_REFERENCE_REQUIRED");
   var result=decode(get("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(reference))).execution();
   if(!source.equals(result.sourceId())||!reference.equals(result.bundleId()+":"+result.bundleVersion()+":"+result.checksum()))throw new IllegalArgumentException("ING_HISTORICAL_REFERENCE_MISMATCH");
-  verifyReferences(result,true);return result;
+  verifyReferences(result,Resolution.HISTORICAL);return result;
  }
- @Override public void preflight(ExecutionBundle bundle){verifyReferences(bundle,false);}
- private void verifyReferences(ExecutionBundle bundle,boolean historical){
+ @Override public void preflight(ExecutionBundle bundle){verifyReferences(bundle,Resolution.PUBLISHED);}
+ @Override public void prepare(ExecutionBundle bundle){verifyReferences(bundle,Resolution.PREPARATION);}
+ enum Resolution {
+  HISTORICAL, PUBLISHED, PREPARATION;
+  boolean accepts(Map<?,?> resolved) {
+   Object status=resolved.get("status");
+   return "ACTIVE".equals(status) || ((this==HISTORICAL || this==PUBLISHED && "DATATYPE".equals(resolved.get("artifact_type")))
+       && ("DEPRECATED".equals(status) || "RETIRED".equals(status)));
+  }
+ }
+ private void verifyReferences(ExecutionBundle bundle,Resolution mode){
   var published=PublishedActivation.map(bundle.configuration(),"publishedBundle");Object raw=published.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");
   var expected=new HashSet<>((Collection<?>)bundle.configuration().get("pinnedReferences"));var seen=new HashSet<String>();
   for(Object item:bindings){if(!(item instanceof Map<?,?>))throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");@SuppressWarnings("unchecked")var b=(Map<String,Object>)item;
    String id=PublishedActivation.text(b,"semanticId"),version=PublishedActivation.text(b,"semanticVersion"),revision=UUID.fromString(PublishedActivation.text(b,"revisionId")).toString(),publication=UUID.fromString(PublishedActivation.text(b,"publicationSetId")).toString();String ref=id+"@"+version;if(!expected.contains(ref)||!seen.add(ref))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
    var resolved=get("/api/semantic/v1/references:resolve?semanticId="+escape(id)+"&revisionId="+revision+"&publicationSetId="+publication);
-   if(!id.equals(resolved.get("semantic_id"))||!version.equals(resolved.get("semantic_version"))||!revision.equals(resolved.get("revision_id"))||!publication.equals(resolved.get("publication_set_id"))||!(historical?Set.of("ACTIVE","DEPRECATED","RETIRED"):Set.of("ACTIVE")).contains(resolved.get("status")))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
+   if(!id.equals(resolved.get("semantic_id"))||!version.equals(resolved.get("semantic_version"))||!revision.equals(resolved.get("revision_id"))||!publication.equals(resolved.get("publication_set_id"))||!mode.accepts(resolved))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
+   ValuePins.verifyBinding(b,resolved);
   }
   if(!seen.equals(expected))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
+  var pins=ValuePins.embedded(bindings);
+  if(published.get("semanticMapping") instanceof Map<?,?> mapping
+      && (mapping.containsKey("compositions") || mapping.get("propertyMappings") instanceof List<?> properties
+          && properties.stream().anyMatch(p -> p instanceof Map<?,?> field && "VALUE_MAP_V1".equals(field.get("transform")))))
+    new ConfiguredValueMapping(PublishedExecutionMapper.map(bundle).configuration(),pins);
  }
  public Map<String,Object> frozenConfiguration(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/ingestion-configuration?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
  public Map<String,Object> compatibility(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/compatibility/ingestion-runtime?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}

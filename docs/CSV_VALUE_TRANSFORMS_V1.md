@@ -1,6 +1,6 @@
 # Trasformazioni dei valori CSV
 
-Onboarding congela una regola per ogni `propertyMappings[].transform`. Ingestion la applica agli UPSERT nello stesso punto della pipeline durante la prontezza e durante la preparazione dell’handoff. Il contratto elenca gli identificatori esatti e gli IRI dei datatype di destinazione. [Contratto v1](../contracts/onboarding-value-transforms-v1.json)
+Onboarding congela i lettori in `semanticMapping.propertyMappings` e i costruttori e i tipi strutturati in `semanticMapping.compositions`. Prontezza e handoff applicano lo stesso mapping agli UPSERT. La tabella riporta i cinque lettori storici. Il contratto comune elenca tutti i lettori, gli IRI di destinazione e le forme delle composizioni. [Contratto D-084](../contracts/ouf-value-types-v1.json)
 
 | Regola | Datatype dichiarato | Esempio di cella CSV | Valore nel payload JSON |
 |---|---|---|---|
@@ -20,4 +20,8 @@ Il valore attraversa l’outbox come stringa decimale in base dieci. `BigDecimal
 
 Una conversione fallita blocca la prova di prontezza. La risposta HTTP 422 contiene `ING_TRANSFORM_VALUE_INVALID` e `rowOrdinal`, l’ordinale del record fornito dall’adapter (per il CSV, da 1 dopo l’intestazione). In esecuzione l’evidenza RAW conserva la cella originale. Il motivo di quarantena contiene il codice e il riferimento all’evidenza include l’ordinale. Il percorso predefinito mantiene il checkpoint e blocca la pubblicazione della riga.
 
-**Verifica del contratto.** `OnboardingValueTransformContractTest` esercita ogni voce del contratto. Con `OUF_ONBOARDING_CHECKOUT` valorizzata confronta tutte le coppie identificatore/datatype con `ManagedFileExecutionProposal.DATATYPES` nel checkout indicato. La CI di modulo esegue questo confronto con il ramo `main` di Onboarding. Per eseguire la prova localmente, impostare la variabile sulla directory del repository proprietario ed eseguire `mvn -Dtest=OnboardingValueTransformContractTest test`.
+Le composizioni possono usare campi inclusi nella proiezione anche quando il campo non ha una proprietà propria. I componenti seguono la definizione del `DATATYPE` fissata da `semanticId@publicationSetId`. Il gateway confronta la definizione e il digest con la risposta del Registry. Il lineage collega il risultato alle celle originali mediante riferimento RAW e SHA-256.
+
+`VALUE_MAP_V1` richiede le corrispondenze codice–IRI della pubblicazione fissata. Il bundle Onboarding attualmente identifica il pin e il vocabolario. Un pin privo della tabella produce `ING_VALUE_MAP_CONTENT_REQUIRED` prima della lettura dei dati.
+
+**Verifica del contratto.** `OnboardingValueTransformContractTest` verifica lo SHA-256 e il catalogo dei lettori. Con `OUF_ONBOARDING_CHECKOUT` valorizzata confronta i byte del contratto con il checkout Onboarding. La CI esegue questo confronto con il ramo `main`.

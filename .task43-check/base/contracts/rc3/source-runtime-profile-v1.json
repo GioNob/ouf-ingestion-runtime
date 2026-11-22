@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/gateway/source-runtime-profile-v1.json",
+  "title": "OUF Source Runtime Profile v1",
+  "description": "Runtime-only source projection consumed by the Gateway; full source configuration remains owned by Source Onboarding / Configuration.",
+  "type": "object",
+  "required": [
+    "sourceId",
+    "profileVersion",
+    "environment",
+    "protocol",
+    "endpointRef",
+    "status"
+  ],
+  "properties": {
+    "sourceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profileVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "endpointRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "credentialRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceSchemaRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "APPROVED",
+        "ACTIVE",
+        "DISABLED",
+        "SUPERSEDED"
+      ]
+    },
+    "tlsProfileRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timeoutProfileRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retryPolicyRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "Gateway boundary/runtime contracts only. No Query Complexity Governor, fine-grained data authorization, Durable ACK authority, schema-drift classification, ETL, semantic processing, Object Resolution, UDP materialization, THS decision logic or MCP Server implementation.",
+  "x-ouf-invariants": [
+    "credentials are references only",
+    "Gateway does not reconstruct full Onboarding configuration"
+  ]
+}

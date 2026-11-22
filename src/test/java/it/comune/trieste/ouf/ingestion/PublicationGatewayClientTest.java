@@ -8,6 +8,43 @@ import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.Test;
 
 class PublicationGatewayClientTest {
+ @Test void resolvedNestedDatatypeMustMatchDigestAndPreparationStatus() throws Exception {
+  String parent="urn:type:parent", child="urn:type:child", set=UUID.randomUUID().toString();
+  var definitions=Map.of(parent,Map.of("components",List.of(Map.of("name","nested","type",child+"@"+set,"cardinality","MANY","required",true))),
+      child,Map.of("components",List.of(Map.of("name","name","type","string","cardinality","ONE","required",false))));
+  var bindings=new ArrayList<Map<String,Object>>();
+  for(String id:List.of(parent,child)) bindings.add(Map.of("semanticId",id,"semanticVersion","1","publicationSetId",set,
+      "revisionId",UUID.randomUUID().toString(),"definition",definitions.get(id),"definitionSha256",ValuePins.digest(definitions.get(id))));
+  var refs=List.of(parent+"@1",child+"@1");
+  var bundle=new ExecutionBundle("test","1","test-hash","test-source","MANAGED",null,
+      Map.of("pinnedReferences",refs,"publishedBundle",Map.of("semanticReferenceBindings",bindings)));
+  var status=new AtomicReference<>("ACTIVE");var corrupt=new AtomicBoolean();
+  var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  var token=Files.createTempFile("datatype-test-",".token");
+  try {
+   Files.writeString(token,"test-token");
+   server.createContext("/api/semantic/v1/references:resolve",exchange->{
+    try {
+     var pin=exchange.getRequestURI().getQuery().contains("semanticId="+parent+"&")?bindings.getFirst():bindings.getLast();
+     boolean nested=child.equals(pin.get("semanticId"));
+     var resolved=Map.of("artifact_type","DATATYPE","semantic_id",pin.get("semanticId"),"semantic_version","1",
+         "publication_set_id",set,"revision_id",pin.get("revisionId"),"status",nested?status.get():"ACTIVE",
+         "definition",pin.get("definition"),"definitionSha256",nested && corrupt.get()?"0".repeat(64):pin.get("definitionSha256"));
+     byte[] body=PublishedActivationTest.JSON.writeValueAsBytes(resolved);
+     exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
+    } finally { exchange.close(); }
+   });
+   server.start();
+   var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
+   client.prepare(bundle);
+   for(String old:List.of("DEPRECATED","RETIRED")){
+    status.set(old);client.preflight(bundle);
+    assertThatThrownBy(()->client.prepare(bundle)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");
+   }
+   status.set("ACTIVE");corrupt.set(true);
+   assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_VALUE_DEFINITION_INVALID");
+  } finally {server.stop(0);Files.deleteIfExists(token);}
+ }
  @Test void nativeClassAndTwentyPropertiesRemainExactlyPinnedWithinTheBound()throws Exception{
   for(int count:List.of(21,32,33)){
    var envelope=PublishedActivationTest.envelope("native-source",true,1);var published=PublishedActivation.map(envelope,"bundle");

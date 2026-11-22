@@ -21,7 +21,7 @@ public final class CanonicalRecordPipeline {
     Config cfg=configuration(c.bundle());Instant acquired=clock.instant();
     String observed=observedAt(c.record(),cfg,acquired),rawRef=sourceRef(c.record());
     RecordMetadata metadata=metadata(c.record());
-    Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?map(c.record(),cfg.mappings()):Map.of();
+    Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?cfg.mapping().apply(c.record().payload(),c.record().ordinal()):Map.of();
     Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
     contracts.validate(ENVELOPE,envelope);
     String rawHash=hash(bytes(c.record().payload())),normalizedHash=hash(bytes(envelope));
@@ -36,10 +36,11 @@ public final class CanonicalRecordPipeline {
   public Result process(Command c){
     UUID attempt=UUID.randomUUID(),lineage=UUID.randomUUID(),handoff=UUID.randomUUID();String rawRef=sourceRef(c.record());
     try{
-      Config cfg=configuration(c.bundle());Instant acquired=c.claim()==null?clock.instant():durable.acquiredAt(c.claim(),c.sequenceNo(),clock.instant());String observed=observedAt(c.record(),cfg,acquired);
+      Instant acquired=c.claim()==null?clock.instant():durable.acquiredAt(c.claim(),c.sequenceNo(),clock.instant());
       byte[] raw=bytes(c.record().payload());String rawHash=hash(raw);
       RuntimePorts.DataLakePort.Receipt rawReceipt=persist(RuntimePorts.DataLakePort.Zone.RAW,c,raw,rawHash,"raw");rawRef=rawReceipt.objectRef();
-      RecordMetadata metadata=metadata(c.record());Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?map(c.record(),cfg.mappings()):Map.of();
+      Config cfg=configuration(c.bundle());String observed=observedAt(c.record(),cfg,acquired);
+      RecordMetadata metadata=metadata(c.record());Map<String,Object> mapped=metadata.operation()==Operation.UPSERT?cfg.mapping().apply(c.record().payload(),c.record().ordinal()):Map.of();
       Map<String,Object> envelope=envelope(c,cfg,metadata,mapped,observed,acquired,rawRef);
       contracts.validate(ENVELOPE,envelope);byte[] normalized=c.claim()==null?bytes(envelope):stableBytes(envelope);String normalizedHash=hash(normalized);
       persist(RuntimePorts.DataLakePort.Zone.NORMALIZED,c,normalized,normalizedHash,"normalized");
@@ -70,22 +71,23 @@ public final class CanonicalRecordPipeline {
     UUID failed=durable.recordFailure(c.runId(),c.record().sourceObjectId(),c.attemptNo(),c.adapterId(),c.bundle().bundleVersion(),code);UUID quarantineId=quarantine.quarantine(c.runId(),failed,c.record().sourceObjectId(),code,rawRef,"schema-surveillance:"+code,c.correlationId());return new Result(failed,null,null,quarantineId,true);
   }
 
-  private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),optional(c,"authorityPolicyRef"),strings(c.get("mappingRefs")),strings(c.get("relationshipResolutionStrategyRefs")),labels(c.get("dataAccessLabels")),mappings(c.get("propertyMappings")),required(c,"observationPolicy"),changeProfile(c.get("changeRepresentationProfile")));}
-  private Map<String,Object> map(AdapterSpi.SourceRecord record,List<Mapping> mappings){
-    Map<String,Object> out=new LinkedHashMap<>();
-    Set<String> targets=new HashSet<>();
-    for(Mapping mapping:mappings){
-      var rule=ConfiguredValueTransform.resolve(mapping.transform());
-      if(!record.payload().containsKey(mapping.sourceField()))throw failure("ING_MAPPING_SOURCE_FIELD_MISSING");
-      if(!targets.add(mapping.targetPropertyIri()))throw failure("ING_MAPPING_TARGET_DUPLICATE");
-      Object value=rule.apply(record.payload().get(mapping.sourceField()),record.ordinal());
-      if(value!=null || rule==ConfiguredValueTransform.IDENTITY)out.put(mapping.targetPropertyIri(),value);
-    }
-    return out;
+  private Config configuration(ExecutionBundle b){Map<String,Object> c=b.configuration();return new Config(required(c,"sourceSchemaRef"),required(c,"sourceSchemaId"),required(c,"sourceSchemaVersion"),required(c,"typeCode"),required(c,"semanticPublicationSetRef"),required(c,"adapterProfileRef"),optional(c,"authorityPolicyRef"),strings(c.get("mappingRefs")),strings(c.get("relationshipResolutionStrategyRefs")),labels(c.get("dataAccessLabels")),mapping(b),required(c,"observationPolicy"),changeProfile(c.get("changeRepresentationProfile")));}
+  private record Compiled(ExecutionBundle bundle, ConfiguredValueMapping mapping) {}
+  private volatile Compiled lastMapping;
+  private ConfiguredValueMapping mapping(ExecutionBundle bundle) {
+    Compiled previous = lastMapping;
+    if (previous != null && previous.bundle() == bundle) return previous.mapping();
+    var config = bundle.configuration();
+    var pins = config.containsKey("publishedBundle")
+        ? ValuePins.embedded(PublishedActivation.map(config,"publishedBundle").getOrDefault("semanticReferenceBindings",List.of()))
+        : ValuePins.EMPTY;
+    var mapping = new ConfiguredValueMapping(config,pins);
+    lastMapping = new Compiled(bundle,mapping);
+    return mapping;
   }
   private String observedAt(AdapterSpi.SourceRecord record,Config cfg,Instant acquired){if("ACQUISITION_TIME".equals(cfg.observationPolicy()))return acquired.toString();if("PROVENANCE_OBSERVED_AT".equals(cfg.observationPolicy())){Object v=record.provenance().get("observedAt");if(v==null)throw failure("ING_OBSERVED_AT_MISSING");try{return OffsetDateTime.parse(String.valueOf(v)).toInstant().toString();}catch(Exception e){throw failure("ING_OBSERVED_AT_INVALID");}}throw failure("ING_OBSERVATION_POLICY_UNSUPPORTED");}
   private Map<String,Object> envelope(Command c,Config cfg,RecordMetadata metadata,Map<String,Object> data,String observed,Instant acquired,String rawRef){Map<String,Object> p=new LinkedHashMap<>(c.record().provenance());p.put("correlationId",c.correlationId());Map<String,Object> e=linked("envelopeVersion","1.0","ingestionId",idempotency(c,"ingestion"),"runId",c.runId().toString(),"sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"sourceSchemaId",cfg.sourceSchemaId(),"sourceSchemaVersion",cfg.sourceSchemaVersion(),"configurationBundleId",c.bundle().bundleId(),"configurationBundleVersion",c.bundle().bundleVersion(),"operation",metadata.operation().name(),"observedAt",observed,"acquiredAt",acquired.toString(),"contentType","application/json","sourceDataRef",rawRef,"provenance",p);if(metadata.operation()==Operation.UPSERT)e.put("data",data);return e;}
-  private Map<String,Object> lineage(Command c,Config cfg,RecordMetadata metadata,UUID attempt,UUID lineage,UUID handoff,String rawRef,String rawHash,String normalizedHash,String outputHash,String observed,Instant acquired,Map<String,Object> refs){Map<String,Object> source=linked("sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"sourceObservedAt",observed);put(source,"sourceRevision",metadata.sourceRevision());return linked("lineageId",lineage.toString(),"ingestionRunId",c.runId().toString(),"ingestionId",idempotency(c,"ingestion"),"handoffId",handoff.toString(),"source",source,"contracts",refs,"processing",linked("pipelineVersion","1.1.0","transformationIds",cfg.mappings().stream().map(Mapping::transform).distinct().toList(),"processingAttemptId",attempt.toString()),"data",linked("rawObjectRef",rawRef,"rawHash",rawHash,"normalizedHash",normalizedHash,"outputHash",outputHash),"times",linked("acquiredAt",acquired.toString(),"processedAt",acquired.toString()),"trace",linked("correlationId",c.correlationId()),"outcome",linked("status","SUCCESS","issueRefs",List.of()));}
+  private Map<String,Object> lineage(Command c,Config cfg,RecordMetadata metadata,UUID attempt,UUID lineage,UUID handoff,String rawRef,String rawHash,String normalizedHash,String outputHash,String observed,Instant acquired,Map<String,Object> refs){Map<String,Object> source=linked("sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"sourceObservedAt",observed);put(source,"sourceRevision",metadata.sourceRevision());return linked("lineageId",lineage.toString(),"ingestionRunId",c.runId().toString(),"ingestionId",idempotency(c,"ingestion"),"handoffId",handoff.toString(),"source",source,"contracts",refs,"processing",linked("pipelineVersion","1.1.0","transformationIds",cfg.mapping().transformations(),"processingAttemptId",attempt.toString()),"data",linked("rawObjectRef",rawRef,"rawHash",rawHash,"normalizedHash",normalizedHash,"outputHash",outputHash),"times",linked("acquiredAt",acquired.toString(),"processedAt",acquired.toString()),"trace",linked("correlationId",c.correlationId()),"outcome",linked("status","SUCCESS","issueRefs",List.of()));}
   private Map<String,Object> handoff(Command c,Config cfg,RecordMetadata metadata,UUID lineage,UUID handoff,String rawRef,String outputHash,String observed,Instant acquired,Map<String,Object> refs,Map<String,Object> candidate){Map<String,Object> identity=linked("sourceId",c.bundle().sourceId(),"typeCode",cfg.typeCode(),"sourceObjectId",c.record().sourceObjectId(),"observedAt",observed);put(identity,"sourceRevision",metadata.sourceRevision());put(identity,"validFrom",metadata.validFrom());put(identity,"validTo",metadata.validTo());Map<String,Object> payload=linked("handoffId",handoff.toString(),"ingestionRunId",c.runId().toString(),"ingestionId",idempotency(c,"ingestion"),"sourceIdentity",identity,"operation",metadata.operation().name(),"rawObjectRef",rawRef,"contractRefs",refs,"lineageId",lineage.toString(),"contentHash",outputHash,"occurredAt",observed,"acquiredAt",acquired.toString(),"changeRepresentation",changeRepresentation(cfg.changeProfile(),metadata,metadata.operation()==Operation.UPSERT?outputHash:null),"correlationId",c.correlationId());if(metadata.operation()==Operation.UPSERT)payload.put("canonicalPayload",candidate);if(!cfg.dataAccessLabels().isEmpty())payload.put("dataAccessLabels",cfg.dataAccessLabels());return payload;}
   private Map<String,Object> contractRefs(ExecutionBundle b,Config cfg){Map<String,Object> m=linked("sourceSchemaRef",cfg.sourceSchemaRef(),"bundleRef",bundleRef(b),"semanticPublicationSetRef",cfg.semanticPublicationSetRef(),"adapterProfileRef",cfg.adapterProfileRef());if(!cfg.mappingRefs().isEmpty())m.put("mappingRefs",cfg.mappingRefs());if(!cfg.relationshipResolutionStrategyRefs().isEmpty())m.put("relationshipResolutionStrategyRefs",cfg.relationshipResolutionStrategyRefs());put(m,"authorityPolicyRef",cfg.authorityPolicyRef());return m;}
   private static boolean controlFailure(RuntimeException e){
@@ -139,8 +141,6 @@ public final class CanonicalRecordPipeline {
   private static Object scalar(Map<String,Object> values,String key){Object value=values.get(key);if(value==null||value instanceof String||value instanceof Number)return value;throw failure("ING_PIPELINE_METADATA_INVALID");}
   private static List<String> strings(Object v){if(v==null)return List.of();if(!(v instanceof Collection<?> x))throw failure("ING_PIPELINE_CONFIG_INVALID");List<String> out=x.stream().map(String::valueOf).toList();if(out.stream().anyMatch(String::isBlank)||new HashSet<>(out).size()!=out.size())throw failure("ING_PIPELINE_CONFIG_INVALID");return out;}
   private static List<Map<String,Object>> labels(Object value){if(value==null)return List.of();if(!(value instanceof Collection<?> items))throw failure("ING_PIPELINE_CONFIG_INVALID");List<Map<String,Object>> out=new ArrayList<>();for(Object item:items){if(!(item instanceof Map<?,?> raw))throw failure("ING_PIPELINE_CONFIG_INVALID");Map<String,Object> label=new LinkedHashMap<>();raw.forEach((k,v)->label.put(String.valueOf(k),v));out.add(Collections.unmodifiableMap(label));}if(new HashSet<>(out).size()!=out.size())throw failure("ING_PIPELINE_CONFIG_INVALID");return List.copyOf(out);}
-  private static List<Mapping> mappings(Object v){if(!(v instanceof Collection<?> x)||x.isEmpty())throw failure("ING_PROPERTY_MAPPING_REQUIRED");List<Mapping> out=new ArrayList<>();for(Object item:x){if(!(item instanceof Map<?,?> m))throw failure("ING_PIPELINE_CONFIG_INVALID");out.add(new Mapping(text(m,"sourceField"),text(m,"targetPropertyIri"),text(m,"transform")));}return List.copyOf(out);}
-  private static String text(Map<?,?> m,String key){Object v=m.get(key);if(v==null||String.valueOf(v).isBlank())throw failure("ING_PIPELINE_CONFIG_INVALID");return String.valueOf(v);}
   private static IllegalArgumentException failure(String code){return new IllegalArgumentException(code);}
   private static String safeCode(RuntimeException e){if(e instanceof FrozenContractValidator.ContractViolation c)return c.safeCode();String m=e.getMessage();return m!=null&&m.matches("ING_[A-Z0-9_]{1,76}")?m:"ING_PROCESSING_FAILED";}
   private static Map<String,Object> linked(Object... values){Map<String,Object> m=new LinkedHashMap<>();for(int i=0;i<values.length;i+=2)m.put((String)values[i],values[i+1]);return m;}
@@ -149,8 +149,7 @@ public final class CanonicalRecordPipeline {
   private enum ChangeMode { FULL_SNAPSHOT,DELTA_PATCH,PROPERTY_EVENTS }
   private record ChangeProfile(ChangeMode mode){}
   private record RecordMetadata(Operation operation,String sourceRevision,String validFrom,String validTo,String baseRevisionRef,String baseContentHash,Object eventSequence,String geometryHash,String relationshipsHash,String contractEvidenceHash){}
-  private record Config(String sourceSchemaRef,String sourceSchemaId,String sourceSchemaVersion,String typeCode,String semanticPublicationSetRef,String adapterProfileRef,String authorityPolicyRef,List<String> mappingRefs,List<String> relationshipResolutionStrategyRefs,List<Map<String,Object>> dataAccessLabels,List<Mapping> mappings,String observationPolicy,ChangeProfile changeProfile){}
-  private record Mapping(String sourceField,String targetPropertyIri,String transform){}
+  private record Config(String sourceSchemaRef,String sourceSchemaId,String sourceSchemaVersion,String typeCode,String semanticPublicationSetRef,String adapterProfileRef,String authorityPolicyRef,List<String> mappingRefs,List<String> relationshipResolutionStrategyRefs,List<Map<String,Object>> dataAccessLabels,ConfiguredValueMapping mapping,String observationPolicy,ChangeProfile changeProfile){}
   public record Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark,RunExecutionRepository.Claim claim){
     public Command(UUID runId,String partitionKey,long sequenceNo,int attemptNo,String adapterId,ExecutionBundle bundle,AdapterSpi.SourceRecord record,String correlationId,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,attemptNo,adapterId,bundle,record,correlationId,restartCheckpoint,candidateWatermark,null);}
     public Command{Objects.requireNonNull(runId);Objects.requireNonNull(bundle);Objects.requireNonNull(record);restartCheckpoint=Map.copyOf(restartCheckpoint);candidateWatermark=Map.copyOf(candidateWatermark);}}

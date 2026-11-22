@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/common/data-access-label-v1.json",
+  "title": "OUF Data Access Label v1",
+  "description": "Opaque governed label. Interpretation belongs to OUF authorization/policy, not to clients.",
+  "type": "object",
+  "required": [
+    "labelId"
+  ],
+  "properties": {
+    "labelId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "x-ouf-status": "draft",
+  "x-ouf-blueprint": "OUF System Integration & Development Blueprint v0.1",
+  "x-ouf-note": "Core fields only. Field-level contract freeze required before promotion to v1.0."
+}

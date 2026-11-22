@@ -59,7 +59,7 @@ public final class FrozenConfigurationProbe {
     if(!(rawExpected instanceof List<?> expected)||expected.stream().anyMatch(x->!(x instanceof String s)||s.isBlank())||new HashSet<>(expected).size()!=expected.size())throw invalid("ING_EXPECTED_FIELDS_INVALID");
     // Exact historical identities are resolved through the same Gateway port used by run preflight.
     requireRunning();
-    semantics.preflight(snapshot);
+    semantics.prepare(snapshot);
     requireRunning();
     var pipeline=new CanonicalRecordPipeline(json,new FrozenContractValidator(json),null,null,null);
     UUID run=UUID.randomUUID();long count=0;

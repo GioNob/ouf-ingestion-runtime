@@ -1,0 +1,52 @@
+name: R2a Onboarding automatic activation
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  publisher-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: ouf, POSTGRES_USER: ouf, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf -d ouf" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      ONBOARDING_ROOT: ${{ github.workspace }}/.pairwise/onboarding
+      R2A_PUBLISHER_SHA: 6d9879f4734c21795d52d86ae8843b188b5623ff
+      PGPASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: 6d9879f4734c21795d52d86ae8843b188b5623ff
+          path: .pairwise/onboarding
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Package real applications and isolated publisher fixture
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
+          mvn -B -ntp -f .pairwise/onboarding/pom.xml -DskipTests package dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/r2-classpath.txt
+          if jar tf .pairwise/onboarding/target/source-onboarding-*.jar | grep -q ActivationPublisherFixture; then exit 1; fi
+      - name: Automatic activation and restart without manual coordinator calls
+        run: timeout --signal=TERM --kill-after=15s 5m python3 pairwise/r2a_activation.py
+      - name: Print bounded diagnostic evidence
+        if: always()
+        run: |
+          if test -f target/r2a-evidence/summary.json; then cat target/r2a-evidence/summary.json; fi
+          for log in target/r2a-evidence/*.log; do if test -f "$log"; then tail -n 60 "$log"; fi; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r2a-automatic-activation-${{ github.run_id }}
+          path: target/r2a-evidence/*.log
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: r2a-activation-summary-${{ github.run_id }}
+          path: target/r2a-evidence/summary.json
+          retention-days: 30

@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/ingestion/handoff-payload-v1.json",
+  "title": "OUF HandoffPayload v1",
+  "description": "Durable handoff contract from Ingestion Runtime to Data Lake/UDP. Reconciled against Ingestion Runtime v1.2 and UDP v1.2.",
+  "type": "object",
+  "required": [
+    "handoffId",
+    "ingestionRunId",
+    "ingestionId",
+    "sourceIdentity",
+    "operation",
+    "contractRefs",
+    "lineageId",
+    "contentHash",
+    "acquiredAt",
+    "changeRepresentation"
+  ],
+  "properties": {
+    "handoffId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ingestionRunId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ingestionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceIdentity": {
+      "type": "object",
+      "required": [
+        "sourceId",
+        "typeCode",
+        "sourceObjectId"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "typeCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceObjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "validFrom": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "validTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "UPSERT",
+        "DELETE",
+        "TOMBSTONE"
+      ]
+    },
+    "canonicalPayload": {
+      "type": "object"
+    },
+    "rawObjectRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "contractRefs": {
+      "type": "object",
+      "required": [
+        "sourceSchemaRef",
+        "bundleRef",
+        "semanticPublicationSetRef",
+        "adapterProfileRef"
+      ],
+      "properties": {
+        "sourceSchemaRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bundleRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "semanticPublicationSetRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapterProfileRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "authorityPolicyRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationshipResolutionStrategyRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "lineageId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contentHash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "occurredAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "acquiredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "qualitySummary": {
+      "type": "object",
+      "properties": {
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validationResultRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "dataAccessLabels": {
+      "type": "array",
+      "items": {
+        "$ref": "../common/data-access-label-v1.json"
+      },
+      "uniqueItems": true
+    },
+    "changeRepresentation": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "FULL_SNAPSHOT",
+            "DELTA_PATCH",
+            "PROPERTY_EVENTS"
+          ]
+        },
+        "baseRevisionRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseContentHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eventSequence": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "canonicalContentHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "geometryHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationshipsHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contractEvidenceHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "DELTA_PATCH"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": [
+                  "baseRevisionRef"
+                ]
+              },
+              {
+                "required": [
+                  "baseContentHash"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "PROPERTY_EVENTS"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "eventSequence"
+            ]
+          }
+        }
+      ]
+    },
+    "correlationId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "UPSERT"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "required": [
+          "canonicalPayload"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Ingestion Runtime v1.2 §45/45.2/45.3/109/124.1",
+    "UDP v1.2 downstream contract"
+  ],
+  "x-ouf-scope-control": "Only HandoffPayload is reconciled here. CanonicalDataEnvelope, LineageRecord, ACK receipt shape, CandidateCanonicalObject and UDP materialization DTOs remain out of scope."
+}

@@ -1,0 +1,11 @@
+replicaCount: 2
+image: {repository: CHANGE-ME, digest: "", pullPolicy: IfNotPresent}
+service: {port: 8080}
+runtime: {existingSecret: CHANGE-ME, existingConfigMap: CHANGE-ME}
+shutdown: {terminationGracePeriodSeconds: 60, preStopSeconds: 5}
+resources:
+  requests: {cpu: 250m, memory: 512Mi}
+  limits: {cpu: "1", memory: 1Gi}
+networkPolicy:
+  ingressNamespaceLabels: {ouf.trieste.it/gateway: "true"}
+  platformNamespaceLabels: {ouf.trieste.it/platform: "true"}

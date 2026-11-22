@@ -61,6 +61,32 @@ class FrozenConfigurationProbeTest {
     assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L)
         .containsEntry("attestationSubmitted",false);
   }
+  @Test void compositionOnlyFrozenCsvUsesThePublishedDefinitionOnEveryRow(){
+    var c=candidate();
+    var configuration=configuration(c);
+    var semantic=PublishedActivation.map(configuration,"semanticMapping");
+    String set=UUID.randomUUID().toString();
+    String id="urn:type:place";
+    var component=Map.of("name","ids","type","integer","cardinality","MANY","required",true);
+    var definition=Map.of("components",List.of(component));
+    semantic.put("semanticRefs",List.of(id+"@1"));
+    semantic.put("propertyMappings",List.of());
+    semantic.put("compositions",List.of(Map.of("kind","STRUCTURED","typeRef",id+"@"+set,
+        "targetPropertyIri","https://example.test/name","dataAccessLabel","OPEN","components",List.of(
+        Map.of("component","ids","items",List.of(Map.of("fieldName","id","reader","INTEGER_V1")))))));
+    configuration.put("semanticReferenceBindings",List.of(Map.of("semanticId",id,"publicationSetId",set,"semanticVersion","1",
+        "revisionId",UUID.randomUUID().toString(),"definition",definition,"definitionSha256",ValuePins.digest(definition))));
+    rehash(c);
+    RuntimePorts.SemanticPort resolver=refs->assertThat(refs).containsExactly(id+"@1");
+    assertThat(new FrozenConfigurationProbe(json,objects(),resolver).probe(c)).containsEntry("validatedRows",2L);
+    byte[] invalid="id;name\r\n1;first\r\nprivate;second\r\n".getBytes(StandardCharsets.UTF_8);
+    execution(c).put("expectedSize",invalid.length);
+    runtime(c).put("contentHash",ExecutionGatewayClient.hash(invalid));rehash(c);
+    var error=catchThrowableOfType(()->new FrozenConfigurationProbe(json,(ref,size,hash)->invalid,resolver).probe(c),
+        ConfiguredValueTransform.InvalidValue.class);
+    assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
+    assertThat(error.rowOrdinal()).isEqualTo(2);
+  }
   @Test void invalidDecimalInFrozenCsvIdentifiesTheDataRow(){
     var error=catchThrowableOfType(()->decimalProbe("45.6500","private-cell"),ConfiguredValueTransform.InvalidValue.class);
     assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();

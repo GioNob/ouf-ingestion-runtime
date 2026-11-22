@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/ingestion/canonical-data-envelope-v1.json",
+  "title": "OUF Canonical Data Envelope v1",
+  "description": "Stable internal contract between Connector/Adapter and the Ingestion processing pipeline. The source-specific payload remains under 'data' and does not become the OUF canonical Urban Object model.",
+  "type": "object",
+  "required": [
+    "envelopeVersion",
+    "ingestionId",
+    "runId",
+    "sourceId",
+    "sourceSchemaId",
+    "sourceSchemaVersion",
+    "configurationBundleId",
+    "configurationBundleVersion",
+    "operation",
+    "observedAt",
+    "acquiredAt",
+    "contentType",
+    "provenance"
+  ],
+  "properties": {
+    "envelopeVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Envelope contract version for this schema artifact. Ingestion Runtime v1.2 defines baseline 1.0 and requires unsupported major versions to be rejected before processing."
+    },
+    "ingestionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of the acquired unit."
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ingestion run that produced the envelope."
+    },
+    "sourceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Governed source identifier."
+    },
+    "typeCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "Native source type. Required by the PET when applicable."
+    },
+    "sourceObjectId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "Technical source-object identity for record envelopes. It is not an UrbanObjectId. The PET requires it for records but does not define a machine-checkable discriminator for all possible non-record envelopes."
+    },
+    "sourceSchemaId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the observed/approved native source schema."
+    },
+    "sourceSchemaVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pinned source schema version; never inferred from the payload."
+    },
+    "configurationBundleId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the pinned PublishedConfigurationBundle used by the run."
+    },
+    "configurationBundleVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pinned bundle version used by the run."
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "UPSERT",
+        "DELETE",
+        "TOMBSTONE",
+        "SNAPSHOT_RECORD"
+      ],
+      "description": "Envelope operation as frozen by Ingestion Runtime v1.2."
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC observation/event timestamp carried by the envelope."
+    },
+    "acquiredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC acquisition timestamp assigned by OUF."
+    },
+    "contentType": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Media/content type of the adapted payload."
+    },
+    "data": {
+      "description": "Conditional source-native or adapted payload limited to fields admitted by the active configuration. Its business shape remains source-specific and is intentionally not modeled here as the OUF Urban Object.",
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
+    },
+    "sourceDataRef": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional durable reference form allowed by the compatibility freeze for payload/sourceData. Included without defining a storage URI scheme."
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "correlationId"
+      ],
+      "properties": {
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cross-module correlation identifier."
+        },
+        "routeRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Non-secret governed route/binding reference when applicable."
+        },
+        "pageRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Non-secret page/cursor reference when applicable."
+        },
+        "changeTokenRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Non-secret change-token reference when applicable."
+        }
+      },
+      "additionalProperties": true,
+      "description": "Non-secret correlation and acquisition provenance. The PET explicitly mentions correlation, route, page/change-token references but does not freeze a broader field list."
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional additive extension area. Namespace/naming is governed; the PET does not define a concrete machine-enforceable namespace syntax, so this schema does not invent one."
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Ingestion Runtime v1.2 §72",
+    "Ingestion Runtime v1.2 §88",
+    "Ingestion Runtime v1.2 §108",
+    "Ingestion Runtime v1.2 §125",
+    "Ingestion Runtime v1.2 §126"
+  ],
+  "x-ouf-compatibility": {
+    "major": 1,
+    "baselineEnvelopeVersion": "1.0",
+    "consumerRule": "Consumers ignore unknown optional fields in major v1 and reject unsupported major versions.",
+    "breakingRule": "Removal or semantic change of a required field requires a new major."
+  },
+  "x-ouf-scope-control": "Only Canonical Data Envelope v1 is reconciled in this revision. This does not change HandoffPayload, LineageRecord, Candidate Canonical Object, transformation/mapping schemas, source-provider contracts or UDP DTOs."
+}

@@ -1,0 +1,7 @@
+# Supported runtime dependency qualification — 2026-10-10
+
+The current image scanner reports Jackson-core/databind CVEs and Spring MVC CVE-2026-47884 / CVE-2026-47890. Upgrade the application parent to Spring Boot 4.0.8 (Spring Framework 7.0.9), with its compatible servlet, Jetty/Tomcat and observability BOM. Keep Java 21, the vendored authorization SDK source and all database migration bytes unchanged. Jackson 2.21.7 remains explicit through the supported transition module and HTTP mapper preference, so existing signed/canonical JSON contracts are tested before integration. Remove obsolete Spring 6/server BOM overrides. Flyway receives its dedicated Boot 4 starter; readiness contributors follow the new package.
+
+This is a qualification branch, not a target release or VPS activation. No HIGH/CRITICAL exceptions, VEX suppressions, test skips or lowered gates are added. Existing module, recovery, publication/serving and SDK checks must pass at the resulting revision before main is advanced. Jackson 2 compatibility is transitional: migrate to Jackson 3 separately only with byte-level contract fixtures and authorization SDK qualification.
+
+Primary references: https://spring.io/security/cve-2026-47884/ ; https://spring.io/security/cve-2026-47890/ ; https://github.com/spring-projects/spring-boot/releases/tag/v4.0.8 ; https://github.com/FasterXML/jackson/wiki/Jackson-Release-2.21.7 ; https://docs.spring.io/spring-boot/4.0/reference/features/json.html .
