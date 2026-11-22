@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { latitudeProperty, property, source, startFixture } from './predecessor-fixture.mjs';
+import { concept, conceptProperty, coordinates, geometryProperty, latitudeProperty, property, source, startFixture } from './predecessor-fixture.mjs';
 
 const exec = promisify(execFile);
 const [scratch, name] = process.argv.slice(2);
@@ -117,6 +117,18 @@ async function verifyRead(operation, runs) {
     runs.map(([publication, row]) => [source, publication, row.run_id, 'SUCCEEDED']), operation);
 }
 
+function verifyCandidateValues(row, body) {
+  const { canonicalPayload: payload } = row.payload_json;
+  assert.equal(payload[latitudeProperty], '45.650123456789012345');
+  assert.equal(payload[conceptProperty], concept);
+  assert.deepEqual(payload[geometryProperty], {
+    crs: 'EPSG:4326', geoJson: { type: 'Point', coordinates: coordinates.map(Number) },
+  });
+  // Inspect the original numeric tokens before JSON.parse can round them to a JS Number.
+  const tokens = body.match(/"coordinates"\s*:\s*\[([^\]]+)\]/)?.[1].split(',').map(value => value.trim());
+  assert.deepEqual(tokens, coordinates);
+}
+
 try {
   await start('old');
   const oldHistory = await history('old');
@@ -132,7 +144,10 @@ try {
   fixture.holdAck = true;
   const second = fixture.publish(2, 'Station', '45.6501234567890123450');
   const pending = await record(second, 'FAILED_RETRYABLE');
-  assert.equal(pending.payload_json.canonicalPayload[latitudeProperty], '45.650123456789012345');
+  verifyCandidateValues(pending, fixture.deliveryBodies[1]);
+  const raw = fixture.rawObjects.get(pending.payload_json.rawObjectRef);
+  assert.equal(raw?.placeTypeCode, 'ST');
+  assert.equal(raw?.geometry, `POINT (${coordinates.join(' ')})`);
   assert.equal(pending.last_error_code, 'ING_EXECUTION_GATEWAY_503');
   assert.equal(pending.attempts, 1);
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');
@@ -145,6 +160,7 @@ try {
   assert.deepEqual(await history('new'), upgradedHistory, 'Flyway history changed on return');
   const retried = await record(second, 'ACKED');
   verifyAck(retried, 2, 'Station');
+  verifyCandidateValues(retried, fixture.deliveryBodies[2]);
   assert.deepEqual(retried.payload_json, pending.payload_json);
   assert.equal(retried.idempotency_key, pending.idempotency_key);
   await verifyRead('status', [[second, retried]]);

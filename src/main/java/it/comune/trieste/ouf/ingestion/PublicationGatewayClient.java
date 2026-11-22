@@ -48,12 +48,14 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   HISTORICAL, PUBLISHED, PREPARATION;
   boolean accepts(Map<?,?> resolved) {
    Object status=resolved.get("status");
-   return "ACTIVE".equals(status) || ((this==HISTORICAL || this==PUBLISHED && "DATATYPE".equals(resolved.get("artifact_type")))
+   Object kind=resolved.get("artifact_type");
+   return "ACTIVE".equals(status) || ((this==HISTORICAL || this==PUBLISHED && ("DATATYPE".equals(kind) || "VALUE_MAP".equals(kind)))
        && ("DEPRECATED".equals(status) || "RETIRED".equals(status)));
   }
  }
  private void verifyReferences(ExecutionBundle bundle,Resolution mode){
   var published=PublishedActivation.map(bundle.configuration(),"publishedBundle");Object raw=published.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");
+  var pins=ValuePins.embedded(bindings);
   var expected=new HashSet<>((Collection<?>)bundle.configuration().get("pinnedReferences"));var seen=new HashSet<String>();
   for(Object item:bindings){if(!(item instanceof Map<?,?>))throw new IllegalArgumentException("ING_EXACT_SEMANTIC_BINDINGS_REQUIRED");@SuppressWarnings("unchecked")var b=(Map<String,Object>)item;
    String id=PublishedActivation.text(b,"semanticId"),version=PublishedActivation.text(b,"semanticVersion"),revision=UUID.fromString(PublishedActivation.text(b,"revisionId")).toString(),publication=UUID.fromString(PublishedActivation.text(b,"publicationSetId")).toString();String ref=id+"@"+version;if(!expected.contains(ref)||!seen.add(ref))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
@@ -62,7 +64,6 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
    ValuePins.verifyBinding(b,resolved);
   }
   if(!seen.equals(expected))throw new IllegalArgumentException("ING_SEMANTIC_BINDING_MISMATCH");
-  var pins=ValuePins.embedded(bindings);
   if(published.get("semanticMapping") instanceof Map<?,?> mapping
       && (mapping.containsKey("compositions") || mapping.get("propertyMappings") instanceof List<?> properties
           && properties.stream().anyMatch(p -> p instanceof Map<?,?> field

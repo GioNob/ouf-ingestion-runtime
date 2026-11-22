@@ -84,6 +84,18 @@ class ConfiguredValueMappingTest {
     bad(()->WKT_V1.bind(Map.of(),ValuePins.EMPTY),"ING_TRANSFORM_PARAMS_INVALID");
   }
 
+  @Test void wktRejectsMeasureOrdinatesWithSafeRowError() {
+    var wkt = WKT_V1.bind(Map.of("crs","EPSG:4326"),ValuePins.EMPTY);
+    assertNotNull(wkt.apply("POINT Z (1 2 3)",7));
+    for (String text : List.of("POINT M (1 2 3)","POINT ZM (1 2 3 4)","POINT M EMPTY",
+        "GEOMETRYCOLLECTION (POINT ZM (1 2 3 4))")) {
+      var error = assertThrows(ConfiguredValueTransform.InvalidValue.class,() -> wkt.apply(text,7));
+      assertEquals("ING_TRANSFORM_VALUE_INVALID",error.getMessage());
+      assertEquals(7L,error.rowOrdinal());
+      assertNull(error.getCause());
+    }
+  }
+
   @Test void pointJoinAndLiteralSplitUseDeclaredRolesAndAbsence() {
     var lon = with(expr("x","DECIMAL_COMMA_V1"),"role","lon");
     var lat = with(expr("y","DECIMAL_DOT_V1"),"role","lat");
@@ -176,18 +188,17 @@ class ConfiguredValueMappingTest {
     var spec = with(schema("codes","concept",true,"MANY"),"constraints",Map.of("vocabularyRef",VOCAB));
     var datatype = pin(A,List.of(spec));
     var header = Map.<String,Object>of("semanticId","urn:map","valueMapRef",MAP,"publicationSetId",SET,"vocabularyRef",VOCAB);
-    var entries = Map.of("01","urn:c:one","02","urn:c:two");
-    var map = new ValuePins.ValueMap(VOCAB,entries);
-    var pins = ValuePins.embedded(List.of(datatype,header),Map.of(MAP,map));
     bad(()->ValuePins.embedded(List.of(header)).valueMap(MAP),"ING_VALUE_MAP_CONTENT_REQUIRED");
+    var entries = List.of(Map.of("code","01","concept","urn:c:one"),Map.of("code","02","concept","urn:c:two"));
+    var embedded = valueMapPin(VOCAB,entries);
+    var pins = ValuePins.embedded(List.of(datatype,embedded));
     var params = Map.of("separator",";","itemReader","VALUE_MAP_V1","itemReaderParams",Map.of("valueMapRef",MAP));
     var expression = root("STRUCTURED",Map.of("typeRef",A,"components",List.of(Map.of("component","codes","constructor",split(params)))));
     assertEquals(Map.of(OUT,Map.of("codes",List.of("urn:c:two","urn:c:one"))),
         mapping(pins,expression).apply(Map.of("x"," 02; ;01"),2));
-    var other = Map.of(MAP,new ValuePins.ValueMap("urn:other",entries));
     var concept = Map.<String,Object>of("semanticId","urn:c:one","publicationSetId",SET,"definition",Map.of("vocabularyRef",VOCAB));
     ValuePins.verifyBinding(concept,with(concept,"artifact_type","CONCEPT"));
-    var fallback = ValuePins.embedded(List.of(datatype,with(header,"vocabularyRef","urn:other"),concept),other);
+    var fallback = ValuePins.embedded(List.of(datatype,valueMapPin("urn:other",entries),concept));
     assertEquals(Map.of(OUT,Map.of("codes",List.of("urn:c:one"))),mapping(fallback,expression).apply(Map.of("x","01"),2));
     bad(()->mapping(fallback,expression).apply(Map.of("x","02"),2),"ING_TRANSFORM_VALUE_INVALID");
     bad(()->mapping(pins,expression).apply(Map.of("x","private-cell"),2),"ING_TRANSFORM_VALUE_INVALID");
@@ -195,14 +206,49 @@ class ConfiguredValueMappingTest {
     var property = Map.<String,Object>of("sourceField","x","targetPropertyIri",OUT,"transform","VALUE_MAP_V1","valueMapRef",MAP);
     assertEquals(Map.of(OUT,"urn:c:one"),new ConfiguredValueMapping(Map.of("propertyMappings",List.of(property)),pins)
         .apply(Map.of("x","01"),2));
-    assertEquals(map,pins.valueMap("urn:map"));
-    var ambiguous = ValuePins.embedded(List.of(header,Map.of("semanticId","urn:map","publicationSetId",new UUID(0,2).toString())),
-        Map.of(MAP,map));
+    assertEquals(pins.valueMap(MAP),pins.valueMap("urn:map"));
+    var ambiguous = ValuePins.embedded(List.of(embedded,Map.of("semanticId","urn:map","publicationSetId",new UUID(0,2).toString())));
     bad(()->ambiguous.valueMap("urn:map"),"ING_VALUE_MAP_PIN_REQUIRED");
-    bad(()->ValuePins.embedded(List.of(with(header,"valueMapRef","wrong")),Map.of(MAP,map)),"ING_VALUE_DEFINITION_INVALID");
-    bad(()->ValuePins.embedded(List.of(with(header,"vocabularyRef","urn:other")),Map.of(MAP,map)),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(with(embedded,"valueMapRef","wrong"))),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(with(embedded,"targetVocabulary","urn:other@"+SET))),"ING_VALUE_DEFINITION_INVALID");
     bad(()->new ConfiguredValueMapping(Map.of("propertyMappings",List.of(with(property,"transformParams",Map.of("valueMapRef","other")))),pins),
         "ING_TRANSFORM_PARAMS_INVALID");
+  }
+
+  @Test void publishedValueMapEnforcesCanonicalEntriesAndBounds() {
+    var upper = Map.<String,Object>of("code","A","concept","urn:concept");
+    var lower = Map.<String,Object>of("code","a","concept","urn:lower");
+    var supplementary = with(upper,"code","\uD83D\uDE00");
+    var bmp = with(upper,"code","\uE000");
+    var pin = valueMapPin(VOCAB,List.of(upper,lower,supplementary,bmp));
+    var reader = VALUE_MAP_V1.bind(Map.of("valueMapRef",MAP),ValuePins.embedded(List.of(pin)));
+    assertEquals("urn:concept",reader.apply(" A ",1));
+    assertEquals("urn:lower",reader.apply("a",1));
+    assertEquals("urn:concept",reader.apply("\uD83D\uDE00",1));
+    assertNull(reader.apply("  ",1));
+    var unknown = assertThrows(ConfiguredValueTransform.InvalidValue.class,() -> reader.apply("private-unmapped",33));
+    assertEquals("ING_TRANSFORM_VALUE_INVALID",unknown.getMessage());
+    assertEquals(33L,unknown.rowOrdinal());
+    assertNull(unknown.getCause());
+
+    var maximum = java.util.stream.IntStream.range(1000,3000)
+        .mapToObj(n -> Map.of("code",Integer.toString(n),"concept","urn:concept")).toList();
+    assertEquals(2000,ValuePins.embedded(List.of(valueMapPin(VOCAB,maximum))).valueMap(MAP).entries().size());
+    var tooMany = new ArrayList<>(maximum);
+    tooMany.add(Map.of("code","3000","concept","urn:concept"));
+    for (var entries : List.<List<?>>of(List.of(),tooMany,List.of(upper,upper),List.of(lower,upper),List.of(bmp,supplementary),
+        List.of(with(upper,"code"," A")),List.of(with(upper,"code","a\u007F")),List.of(with(upper,"code","x".repeat(129))),
+        List.of(with(upper,"concept","relative")),List.of(with(upper,"extra",true)))) {
+      bad(() -> ValuePins.embedded(List.of(valueMapPin(VOCAB,entries))),"ING_VALUE_DEFINITION_INVALID");
+    }
+    bad(() -> ValuePins.embedded(List.of(with(pin,"definitionSha256","0".repeat(64)))),"ING_VALUE_DEFINITION_INVALID");
+  }
+
+  private static Map<String,Object> valueMapPin(String vocabulary,List<?> entries) {
+    var target = vocabulary+"@"+new UUID(0,7);
+    var definition = Map.of("targetVocabulary",target,"entries",entries,"labels",Map.of("it","Valori"));
+    return Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef",MAP,"targetVocabulary",target,
+        "revisionId",new UUID(0,8).toString(),"definition",definition,"definitionSha256",ValuePins.digest(definition));
   }
 
   @Test void canonicalBoundsApplyChronologicallyAndNumerically() {

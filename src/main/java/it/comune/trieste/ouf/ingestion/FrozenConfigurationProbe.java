@@ -57,7 +57,7 @@ public final class FrozenConfigurationProbe {
         ||new HashSet<>(keys).size()!=keys.size()||("NATIVE_KEY".equals(strategy)?keys.size()!=1:keys.size()<2))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
     Object rawExpected=bundle.configuration().get("expectedFieldNames");
     if(!(rawExpected instanceof List<?> expected)||expected.stream().anyMatch(x->!(x instanceof String s)||s.isBlank())||new HashSet<>(expected).size()!=expected.size())throw invalid("ING_EXPECTED_FIELDS_INVALID");
-    // Preparation requires active datatype revisions and uses the same exact resolver as run preflight.
+    // Preparation requires active revisions and uses the same exact resolver as run preflight.
     requireRunning();
     semantics.prepare(snapshot);
     requireRunning();

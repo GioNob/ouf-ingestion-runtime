@@ -45,6 +45,74 @@ class PublicationGatewayClientTest {
    assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_VALUE_DEFINITION_INVALID");
   } finally {server.stop(0);Files.deleteIfExists(token);}
  }
+ @Test void publishedValueMapMustMatchExactRegistryEvidenceInEveryResolutionMode() throws Exception {
+  String id="urn:map", set=UUID.randomUUID().toString(), revision=UUID.randomUUID().toString();
+  String target="urn:vocab@"+UUID.randomUUID();
+  var definition=Map.of("targetVocabulary",target,"entries",List.of(Map.of("code","A","concept","urn:concept:a")));
+  String digest=ValuePins.digest(definition);
+  var pin=Map.of("semanticId",id,"semanticVersion","1","publicationSetId",set,"revisionId",revision,
+      "valueMapRef",id+"@"+set,"targetVocabulary",target,"definition",definition,"definitionSha256",digest);
+  var envelope=PublishedActivationTest.envelope("map-source",true,1);
+  var published=PublishedActivation.map(envelope,"bundle");
+  published.put("semanticRefs",List.of(id+"@1"));
+  published.put("semanticReferenceBindings",List.of(pin));
+  PublishedActivationTest.hash(published);
+  envelope.put("checksum",published.get("checksum"));
+  var exact=Map.<String,Object>of("artifact_type","VALUE_MAP","semantic_id",id,"semantic_version","1","publication_set_id",set,
+      "revision_id",revision,"status","ACTIVE","definition",definition,"definitionSha256",digest);
+  var actual=new AtomicReference<Map<String,Object>>(exact);
+  var calls=new AtomicInteger();
+  var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  var token=Files.createTempFile("value-map-test-",".token");
+  try {
+   Files.writeString(token,"test-token");
+   server.createContext("/api/semantic/v1/references:resolve",exchange->{
+    try {
+     String query="semanticId="+id+"&revisionId="+revision+"&publicationSetId="+set;
+     if(!query.equals(exchange.getRequestURI().getQuery()) ||
+         !"Bearer test-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))){
+      exchange.sendResponseHeaders(403,-1);return;
+     }
+     calls.incrementAndGet();
+     byte[] body=PublishedActivationTest.JSON.writeValueAsBytes(actual.get());
+     exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
+    } finally {exchange.close();}
+   });
+   server.createContext("/api/onboarding/v1/runtime/publications/resolve",exchange->{
+    try {
+     byte[] body=PublishedActivationTest.JSON.writeValueAsBytes(envelope);
+     exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
+    } finally {exchange.close();}
+   });
+   server.start();
+   var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
+   var bundle=client.decode(envelope).execution();
+   String ref=bundle.bundleId()+":"+bundle.bundleVersion()+":"+bundle.checksum();
+   client.prepare(bundle);
+   for(String status:List.of("DEPRECATED","RETIRED")){
+    var resolved=new HashMap<>(exact);resolved.put("status",status);actual.set(resolved);
+    client.preflight(bundle);
+    assertThat(client.loadHistoricalAndVerify("map-source",ref).checksum()).isEqualTo(bundle.checksum());
+    assertThatThrownBy(()->client.prepare(bundle)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");
+   }
+   for(var change:Map.<String,Object>of("definitionSha256","0".repeat(64),"definition",
+       Map.of("targetVocabulary",target,"entries",List.of(Map.of("code","A","concept","urn:concept:other"))),
+       "artifact_type","DATATYPE").entrySet()){
+    var resolved=new HashMap<>(exact);resolved.put(change.getKey(),change.getValue());actual.set(resolved);
+    assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_VALUE_DEFINITION_INVALID").hasNoCause();
+   }
+   var differentRevision=new HashMap<>(exact);differentRevision.put("revision_id",UUID.randomUUID().toString());actual.set(differentRevision);
+   assertThatThrownBy(()->client.preflight(bundle)).hasMessage("ING_SEMANTIC_BINDING_MISMATCH");
+   var header=new HashMap<>(pin);header.remove("definition");header.remove("definitionSha256");
+   published.put("semanticReferenceBindings",List.of(header));
+   PublishedActivationTest.hash(published);
+   envelope.put("checksum",published.get("checksum"));
+   var incomplete=client.decode(envelope).execution();
+   int count=calls.get();
+   assertThatThrownBy(()->client.preflight(incomplete)).hasMessage("ING_VALUE_MAP_CONTENT_REQUIRED");
+   assertThat(calls).hasValue(count);
+  } finally {server.stop(0);Files.deleteIfExists(token);}
+ }
  @Test void nativeClassAndTwentyPropertiesRemainExactlyPinnedWithinTheBound()throws Exception{
   for(int count:List.of(21,32,33)){
    var envelope=PublishedActivationTest.envelope("native-source",true,1);var published=PublishedActivation.map(envelope,"bundle");

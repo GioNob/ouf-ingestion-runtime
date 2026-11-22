@@ -12,18 +12,14 @@ final class ValuePins {
   static final ValuePins EMPTY = new ValuePins(Map.of(), Map.of(), Map.of(), Map.of());
   static final Set<String> BASE = Set.of("string","integer","decimal","boolean","date","datetime","geometry","concept");
   private final Map<String,Map<String,Component>> definitions;
-  private record MapPin(ValueMap contents) {}
-  private final Map<String,MapPin> maps;
+  private final Map<String,ValueMap> maps;
   private final Map<String,String> uniquePins;
   private final Map<String,Set<String>> concepts;
   record ValueMap(String vocabulary, Map<String,String> entries) {
-    ValueMap {
-      require(absolute(vocabulary) && entries.values().stream().allMatch(ValuePins::absolute));
-      entries = Map.copyOf(entries);
-    }
+    ValueMap { entries = Map.copyOf(entries); }
   }
 
-  private ValuePins(Map<String,Map<String,Component>> definitions, Map<String,MapPin> maps, Map<String,String> uniquePins,
+  private ValuePins(Map<String,Map<String,Component>> definitions, Map<String,ValueMap> maps, Map<String,String> uniquePins,
                     Map<String,Set<String>> concepts) {
     this.definitions = Map.copyOf(definitions);
     this.maps = Map.copyOf(maps);
@@ -33,17 +29,12 @@ final class ValuePins {
   }
 
   static ValuePins embedded(Object rawBindings) {
-    return embedded(rawBindings, Map.of());
-  }
-
-  // Pin headers and the publisher's exact code table must describe the same publication.
-  static ValuePins embedded(Object rawBindings, Map<String,ValueMap> publishedContents) {
     if (!(rawBindings instanceof List<?> bindings)) throw error();
-    if (publishedContents.isEmpty() && bindings.stream().map(ValuePins::object)
+    if (bindings.stream().map(ValuePins::object)
         .noneMatch(p -> p.containsKey("definition") || p.containsKey("definitionSha256") || p.containsKey("valueMapRef"))) return EMPTY;
     Map<String,Map<String,Component>> schemas = new LinkedHashMap<>();
     Map<String,Set<String>> members = new HashMap<>();
-    Map<String,MapPin> maps = new LinkedHashMap<>();
+    Map<String,ValueMap> maps = new LinkedHashMap<>();
     var unique = new HashMap<String,String>();
     var coordinates = new HashSet<String>();
     var vocabularies = new HashMap<String,String>();
@@ -54,16 +45,11 @@ final class ValuePins {
       require(coordinates.add(ref));
       unique.merge(id,ref,(first,second) -> "");
       if (pin.containsKey("valueMapRef")) {
-        require(ref.equals(pin.get("valueMapRef")) && absolute(string(pin,"vocabularyRef")));
-        var contents = publishedContents.get(ref);
-        require(contents == null || contents.vocabulary.equals(pin.get("vocabularyRef")));
-        maps.put(ref,new MapPin(contents));
-      }
-      if (pin.containsKey("definitionSha256")) {
-        var definition = object(pin.get("definition"));
-        require(digest(definition).equals(pin.get("definitionSha256")));
+        require(ref.equals(pin.get("valueMapRef")));
+        maps.put(ref,mapContents(pin));
+      } else if (pin.containsKey("definitionSha256")) {
         require(absolute(id));
-        schemas.put(ref,components(definition));
+        schemas.put(ref,components(checkedDefinition(pin)));
       } else if (pin.containsKey("definition")) {
         var definition = object(pin.get("definition"));
         String vocabulary = string(definition,"vocabularyRef");
@@ -73,19 +59,63 @@ final class ValuePins {
         members.computeIfAbsent(vocabulary, ignored -> new HashSet<>()).add(id);
       }
     }
-    require(maps.keySet().containsAll(publishedContents.keySet()));
     return new ValuePins(schemas, maps, unique, members);
   }
 
   static void verifyBinding(Map<?,?> pin, Map<?,?> actual) {
-    if ("DATATYPE".equals(actual.get("artifact_type"))) {
-      var definition = object(pin.get("definition"));
-      require(definition.equals(actual.get("definition")) && digest(definition).equals(pin.get("definitionSha256"))
-          && pin.get("definitionSha256").equals(actual.get("definitionSha256")));
+    Object kind = actual.get("artifact_type");
+    if (pin.containsKey("valueMapRef") || "VALUE_MAP".equals(kind)) {
+      requireMapContent(pin);
+      require("VALUE_MAP".equals(kind) && pin.containsKey("valueMapRef"));
+      verifyDefinition(pin,actual);
+    } else if ("DATATYPE".equals(kind)) {
+      verifyDefinition(pin,actual);
     } else if (pin.containsKey("definition") || pin.containsKey("definitionSha256")) {
-      require("CONCEPT".equals(actual.get("artifact_type")) && !pin.containsKey("definitionSha256")
+      require("CONCEPT".equals(kind) && !pin.containsKey("definitionSha256")
           && object(pin.get("definition")).equals(actual.get("definition")));
     }
+  }
+
+  private static void verifyDefinition(Map<?,?> pin, Map<?,?> actual) {
+    require(checkedDefinition(pin).equals(actual.get("definition"))
+        && pin.get("definitionSha256").equals(actual.get("definitionSha256")));
+  }
+
+  private static Map<?,?> checkedDefinition(Map<?,?> pin) {
+    var definition = object(pin.get("definition"));
+    require(digest(definition).equals(pin.get("definitionSha256")));
+    return definition;
+  }
+
+  private static ValueMap mapContents(Map<?,?> pin) {
+    requireMapContent(pin);
+    var definition = checkedDefinition(pin);
+    require(Set.of("targetVocabulary","entries","labels").containsAll(definition.keySet()));
+    String target = string(definition,"targetVocabulary");
+    require(target.equals(pin.get("targetVocabulary")));
+    int at = target.lastIndexOf('@');
+    require(at > 0 && publicationId(target.substring(at + 1)));
+    String vocabulary = target.substring(0,at);
+    require(absolute(vocabulary));
+    if (definition.containsKey("labels")) {
+      var labels = object(definition.get("labels"));
+      require(Set.of("it","en").containsAll(labels.keySet()) && labels.values().stream().allMatch(String.class::isInstance));
+    }
+    var items = list(definition.get("entries"));
+    require(!items.isEmpty() && items.size() <= 2000);
+    var entries = new HashMap<String,String>();
+    String previous = null;
+    for (Object item : items) {
+      var entry = object(item);
+      require(entry.keySet().equals(Set.of("code","concept")));
+      String code = string(entry,"code"), concept = string(entry,"concept");
+      require(code.codePointCount(0,code.length()) <= 128 && code.equals(code.strip())
+          && code.chars().noneMatch(c -> c <= 0x1f || c == 0x7f) && absolute(concept));
+      require(previous == null || previous.compareTo(code) < 0);
+      entries.put(code,concept);
+      previous = code;
+    }
+    return new ValueMap(vocabulary,entries);
   }
   private static final ObjectWriter WRITER = new ObjectMapper().writer(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
       .without(SerializationFeature.INDENT_OUTPUT);
@@ -95,8 +125,11 @@ final class ValuePins {
   }
   private static String publication(Map<?,?> pin) {
     String set = string(pin,"publicationSetId");
-    require(set.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}"));
+    require(publicationId(set));
     return set;
+  }
+  private static boolean publicationId(String value) {
+    return value.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");
   }
   private void checkClosure(String ref, Set<String> path, int[] leaves) {
     int split = ref.lastIndexOf('@');
@@ -115,8 +148,10 @@ final class ValuePins {
   ValueMap valueMap(String ref) {
     var pin = maps.get(maps.containsKey(ref) ? ref : uniquePins.getOrDefault(ref,""));
     if (pin == null) throw new IllegalArgumentException("ING_VALUE_MAP_PIN_REQUIRED");
-    if (pin.contents == null) throw new IllegalArgumentException("ING_VALUE_MAP_CONTENT_REQUIRED");
-    return pin.contents;
+    return pin;
+  }
+  private static void requireMapContent(Map<?,?> pin) {
+    if (pin.get("definition") == null) throw new IllegalArgumentException("ING_VALUE_MAP_CONTENT_REQUIRED");
   }
   boolean member(String iri, String vocabulary, ValueMap producer) {
     return producer != null && vocabulary.equals(producer.vocabulary)
