@@ -30,6 +30,11 @@ final class OperationalRecovery {
           then nullif(btrim(snap.snapshot_json#>>'{configuration,publishedBundle,semanticMapping,sourceType,typeCode}'),'')
           else nullif(btrim(snap.snapshot_json#>>'{configuration,typeCode}'),'') end
       end pinned_type,
+      (select string_agg(c.value->>'classIri',' ' order by c.ordinality)
+         from jsonb_array_elements(case when jsonb_typeof(snap.snapshot_json#>'{configuration,publishedBundle,semanticMapping,targetClasses}')='array'
+           then snap.snapshot_json#>'{configuration,publishedBundle,semanticMapping,targetClasses}' else '[]'::jsonb end)
+           with ordinality c(value,ordinality)
+         where jsonb_typeof(c.value->'classIri')='string') canonical_types,
       coalesce(ack.confirmed,false) handoff_confirmed
     from page
     left join ouf_ingestion.ing_run r on r.run_id=page.job_ref and r.tenant_id=page.tenant_id
@@ -150,6 +155,12 @@ final class OperationalRecovery {
     }
     if (state != null) row.put("udpHandoffConfirmed",confirmed);
     if (confirmed && typeCode != null) row.put("typeCode",typeCode);
+    // semanticMapping.targetClasses[].classIri of the run's pinned bundle (IRIs contain no whitespace).
+    if (row.remove("canonical_types") instanceof String joined && !joined.isBlank()) {
+      var types=List.of(joined.trim().split(" "));
+      row.put("canonicalTypes",types);
+      if (types.size()==1) row.put("canonicalType",types.get(0));
+    }
     if (state == RecoveryAction.RunState.PAUSED) {
       row.put("runId",row.get("job_ref"));
       row.put("expectedVersion",((Number) row.get("action_version")).longValue());

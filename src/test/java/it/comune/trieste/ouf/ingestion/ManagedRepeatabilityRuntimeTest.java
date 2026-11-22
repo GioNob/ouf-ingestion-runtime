@@ -67,13 +67,18 @@ class ManagedRepeatabilityRuntimeTest {
     return publish(sequence,csv,Map.of());
   }
   private PublishedActivation publish(long sequence,String csv,Map<String,Object> sync){
+    return publish(sequence,csv,sync,null);
+  }
+  private PublishedActivation publish(long sequence,String csv,Map<String,Object> sync,String targetClassIri){
     byte[] bytes=csv.getBytes(StandardCharsets.UTF_8);
     var envelope=PublishedActivationTest.envelope(source,true,sequence);
     var b=PublishedActivation.map(envelope,"bundle");
     var config=PublishedActivation.map(new FrozenConfigurationProbeTest().candidate(),"configuration");
     for(String key:List.of("extractionProfile","semanticMapping","sourceObjectIdentityPolicy","changeRepresentationProfile","dataAccessPolicies"))
       b.put(key,config.get(key));
-    PublishedActivation.map(b,"semanticMapping").put("sourceType",Map.of("sourceId",source,"typeCode","PLACE"));
+    var semantic=PublishedActivation.map(b,"semanticMapping");
+    semantic.put("sourceType",Map.of("sourceId",source,"typeCode","PLACE"));
+    if(targetClassIri!=null)semantic.put("targetClasses",List.of(Map.of("classIri",targetClassIri)));
     var runtime=PublishedActivation.map(PublishedActivation.map(b,"extractionProfile"),"runtime");
     String hash=ExecutionGatewayClient.hash(bytes);assets.put(hash,bytes);
     runtime.put("contentHash",hash);PublishedActivation.map(runtime,"execution").put("expectedSize",bytes.length);
@@ -116,6 +121,39 @@ class ManagedRepeatabilityRuntimeTest {
   }
   private RunLifecycleService controls(){return new RunLifecycleService(db,json,refs->{},transactions);}
   private long count(String table){return db.sql("select count(*) from ouf_ingestion."+table).query(Long.class).single();}
+
+  @Test @DisplayName("ING-51F-PINNED")
+  void operationalReadsKeepTheCanonicalTypeOfEachRun(){
+    String poi="https://w3id.org/italia/onto/POI/PointOfInterest";
+    publish(1,firstCsv,Map.of(),poi);
+    UUID completed=finish(dispatch().orElseThrow());
+    for(var row:List.of(status(),latestHistory())){
+      assertThat(row).containsEntry("runState","COMPLETED").containsEntry("canonicalType",poi).containsEntry("canonicalTypes",List.of(poi))
+        .containsEntry("typeCode","PLACE").containsEntry("udpHandoffConfirmed",true);
+    }
+
+    String station="https://example.test/Station";
+    publish(2,firstCsv,Map.of(),station);
+    for(var row:List.of(status(),latestHistory()))assertThat(row).doesNotContainKey("canonicalType");
+    UUID paused=dispatch().orElseThrow();
+    controls().pause(paused,0,human,"pause");
+    for(var row:List.of(status(),latestHistory())){
+      assertThat(row).containsEntry("job_ref",paused).containsEntry("runState","PAUSED")
+        .containsEntry("canonicalType",station).containsEntry("udpHandoffConfirmed",false).doesNotContainKey("typeCode");
+    }
+    assertThat(operations.history(source,null,10,human).getLast())
+      .containsEntry("job_ref",completed).containsEntry("canonicalType",poi);
+  }
+
+  @Test @DisplayName("ING-51F-LEGACY")
+  void completedRunWithoutAPublishedClassOmitsCanonicalType(){
+    publish(1,firstCsv);
+    finish(dispatch().orElseThrow());
+    for(var row:List.of(status(),latestHistory())){
+      assertThat(row).containsEntry("runState","COMPLETED").containsEntry("typeCode","PLACE")
+        .doesNotContainKeys("canonicalType","canonicalTypes","canonical_types");
+    }
+  }
 
   @ParameterizedTest @EnumSource(RecoveryAction.RunState.class)
   void operationalRecoveryCoversEveryRunStateAndFailureClass(RecoveryAction.RunState runState){

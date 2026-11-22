@@ -104,7 +104,15 @@ components:
           format: date-time
           description: End of the owner window for the observed schedule review, in ISO-8601 UTC. It is based on durable pause or blocking incident evidence. Its expiry does not transition the schedule.
         udpHandoffConfirmed: {type: boolean, description: The completed run has at least one handoff and each has a persisted durable acknowledgement.}
-        typeCode: {type: string, minLength: 1, description: Type pinned in the immutable configuration of a run with confirmed UDP handoff.}
+        typeCode: {type: string, minLength: 1, description: Source type code pinned in the immutable configuration of a run with confirmed UDP handoff.}
+        canonicalType:
+          type: string
+          minLength: 1
+          description: Canonical object class IRI pinned for this run. Available in any run state including PAUSED. Omitted when the run snapshot does not specify the class.
+        canonicalTypes:
+          type: array
+          items: {type: string}
+          description: semanticMapping.targetClasses[].classIri del bundle fissato nel run, in ordine; canonicalType è presente solo se la classe è una.
         runId: {type: string, format: uuid, description: Governed run target for a human decision.}
         expectedVersion: {type: integer, minimum: 0}
       allOf:
