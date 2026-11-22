@@ -176,18 +176,48 @@ public class DurablePipelineRepository {
   }
 
   /** Short transaction before I/O. Only a confirmed matching receipt can skip a write. */
-  @Transactional public Optional<String> beginLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash){
+  @Transactional public LakeIntent beginLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash){
     lockPartition(c.claim());
     int inserted=sql.sql("""
       insert into ouf_ingestion.lake_write_evidence(run_id,partition_key,sequence_no,effect,content_hash)
       values(:r,:p,:seq,:effect,:hash) on conflict do nothing
       """).param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo())
       .param("effect",effect).param("hash",hash).update();
-    if(inserted==1)return Optional.empty();
-    var row=sql.sql("select content_hash,receipt_ref from ouf_ingestion.lake_write_evidence where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect")
+    if(inserted==1)return new LakeIntent(true,hash,null,false);
+    var row=sql.sql("select content_hash,receipt_ref,(abort_required or human_review) blocked from ouf_ingestion.lake_write_evidence where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect")
       .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).query().singleRow();
-    if(!hash.equals(row.get("content_hash")) || row.get("receipt_ref")==null)throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
-    return Optional.of((String)row.get("receipt_ref"));
+    return new LakeIntent(false,(String)row.get("content_hash"),(String)row.get("receipt_ref"),
+        Boolean.TRUE.equals(row.get("blocked")));
+  }
+  public record LakeIntent(boolean fresh,String hash,String receipt,boolean blocked){}
+
+  public record PendingEffect(long sequence,String effect,boolean blocked){}
+  public List<PendingEffect> pendingEffects(RunExecutionRepository.Claim c){
+    return sql.sql("""
+        select sequence_no,effect,(abort_required or human_review) from ouf_ingestion.lake_write_evidence
+        where run_id=:r and partition_key=:p and (receipt_ref is null or abort_required or human_review)
+        order by sequence_no,effect limit 4
+        """).param("r",c.runId()).param("p",c.partitionKey())
+        .query((rs,n)->new PendingEffect(rs.getLong(1),rs.getString(2),rs.getBoolean(3))).list();
+  }
+
+  @Transactional public void recordLakeFailure(RunExecutionRepository.Claim claim,long sequence,String effect,String cause,boolean blocked,boolean humanReview){
+    lockPartition(claim);
+    int changed=sql.sql("""
+        update ouf_ingestion.lake_write_evidence set cause_code=:cause,cause_at=clock_timestamp(),abort_required=:blocked,human_review=:review
+        where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect
+        """).param("cause",cause).param("blocked",blocked).param("review",humanReview).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+    if(changed!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
+    sql.sql("""
+        insert into ouf_ingestion.operational_event(severity,event_type,correlation_id,run_id,source_id,
+            resource_type,resource_id,error_code,detail_json)
+        select 'WARN','LAKE_WRITE_FAILURE',correlation_id,run_id,source_id,'RUN',run_id::text,:cause,
+            jsonb_build_object('partitionKey',cast(:p as text),'sequenceNo',cast(:seq as bigint),'effect',cast(:effect as text))
+        from ouf_ingestion.ing_run where run_id=:r
+        """).param("cause",cause).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+
   }
 
   @Transactional public void finishLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash,String receipt){
@@ -197,7 +227,7 @@ public class DurablePipelineRepository {
     var query=sql.sql(statement+" where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect and content_hash=:hash and receipt_ref is null")
       .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).param("hash",hash);
     if(receipt!=null)query=query.param("receipt",receipt);
-    if(query.update()!=1)throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+    if(query.update()!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
   }
 
   private void lockPartition(RunExecutionRepository.Claim c){

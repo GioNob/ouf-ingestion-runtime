@@ -108,7 +108,7 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
  private Map<String,Object> getConfiguration(String path){return exchange(path,null,200,MAX_CONFIGURATION_RESPONSE_BYTES);}
  private Map<String,Object> exchange(String path,Object body,int expected){return exchange(path,body,expected,MAX_RESPONSE_BYTES);}
  @SuppressWarnings("unchecked") private Map<String,Object> exchange(String path,Object body,int expected,int maxResponseBytes){
-  try{String token=Files.readString(tokenFile).strip();if(token.isEmpty()||token.length()>16384||token.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
+  try{String token=WorkloadTokenFile.read(tokenFile);
    if(Thread.currentThread().isInterrupted())throw new InterruptedException();
    var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString());
    if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));

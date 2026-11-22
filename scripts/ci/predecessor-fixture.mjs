@@ -87,7 +87,7 @@ export async function startFixture(dir) {
   }
   let current;
   const fixture = {
-    deliveries: [], deliveryBodies: [], rawObjects: new Map(), holdAck: false,
+    deliveries: [], deliveryBodies: [], rawObjects: new Map(), holdAck: false, dropLakeReceipt: false, droppedWrite: null, reconciledWrite: false,
     publish(sequence, value, latitude) {
       current = publication(sequence, value, latitude);
       return current.envelope.publicationId;
@@ -126,6 +126,15 @@ export async function startFixture(dir) {
           const content = Buffer.from(body.contentBase64, 'base64');
           const hash = 'sha256:' + digest(content);
           assert.equal(body.contentHash, hash);
+          if (fixture.dropLakeReceipt && body.zone === 'NORMALIZED') {
+            fixture.dropLakeReceipt = false;
+            fixture.droppedWrite = body;
+            return res.destroy();
+          }
+          if (fixture.droppedWrite?.idempotencyKey === body.idempotencyKey) {
+            assert.deepEqual(body, fixture.droppedWrite);
+            fixture.reconciledWrite = true;
+          }
           const objectRef = 'lake:' + body.idempotencyKey;
           if (body.zone === 'RAW') fixture.rawObjects.set(objectRef, JSON.parse(content));
           return reply(201, { durable: true, contentHash: hash, objectRef });

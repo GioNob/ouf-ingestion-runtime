@@ -69,3 +69,16 @@
 Main reconciles the advanced governed-record-retry / IAM / frozen-configuration source baseline 163c167d09b8371ff7a62ce7068e9d485b6969b7 with supported-runtime corrections. All fourteen retained SQL migrations are unchanged. Candidate 8b908554314617298242eb2ae8312f734f55e817 passes all eight workflows, 118 tests (zero failures/errors/skips), full HIGH/CRITICAL image scan including unfixed entries (zero findings), PostgreSQL restore, R2 serving/GeoPackage and frozen consumer probes. SQLite native plus XLSX round-trip also pass inside the actual non-root runtime image with network disabled, root filesystem read-only and isolated executable /tmp for native-library loading. [Qualification](docs/LIVE_BASELINE_QUALIFICATION_20261010.md), [current evidence](evidence/live-baseline-qualified-20261010.json).
 
 The original distroless scan failed on nine OS HIGH; its evidence is retained. No exceptions were added. Older file-loop-ci-qualified evidence remains historical and does not describe this candidate. Source reconciliation does not import an image, mutate the VPS, replay Cinema or grant release acceptance. Current PET v1.3 / Matrix v1.7 / Blueprint v0.3 and terminology notice v1.1 remain applicable; file consolidation and authorized search precede native vertical API PULL v2.3. Pin actual Docker base digests during release preparation.
+
+## Sprint 03 task 48
+
+Ingestion Runtime 1.3 sections 7.3, 14, 15, 20.1 and 21 cover the cursor, content identity, bounded retries and short worker transactions. MCP PET 1.4 section 33 covers operational status and history.
+
+| PET matrix ID | Candidate regression |
+|---|---|
+| PET-ingestion-004 / ING-E04, PET-ingestion-017 / ING-P02 | `ManagedRepeatabilityRuntimeTest.lakePostReconcilesOnlyMatchingEvidence` and the lost lake response in `predecessor-return` |
+| PET-ingestion-013 / ING-E13 | `ManagedRepeatabilityRuntimeTest.connectionRefusalCancelsOnlyAFreshIntent`, `exhaustedLakeReplayWaitsForANewHumanBudget`, `workerLossBeforeRetrySchedulingKeepsTheOriginalDeadline` |
+| PET-ingestion-016 / ING-P01 | `ManagedRepeatabilityRuntimeTest.humanResumesLegacyLakeIntentFromTheSavedCursor` |
+| PET-ingestion-015 / ING-E15 (workload file read) | `ExecutionGatewayClientTest.incompleteTokenStopsBeforePostAndRotationRecovers` |
+
+Candidate qualification uses the module CI suite with PostgreSQL 17 and the predecessor-return job pinned to `8be19a36`.

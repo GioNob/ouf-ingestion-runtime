@@ -14,15 +14,17 @@ public class OperationalAwarenessService {
   public List<Map<String,Object>> status(String source,int limit,TrustedAuthorizationContext.Context actor){
     return sql.sql("""
       select source_ref,publication_id,schedule_state,health_state,consecutive_failures,error_code,
-             next_retry_at,circuit_open_until,job_ref,control_version,run_state,last_seen_at,correlation_id
-      from ouf_ingestion.current_source_status where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
+             next_retry_at,circuit_open_until,job_ref,control_version,run_state,last_seen_at,correlation_id,
+             l.lake_cause_code,coalesce(l.lake_next_action,'NONE') lake_next_action
+      from ouf_ingestion.current_source_status cs left join ouf_ingestion.run_lake_recovery l on l.run_id=cs.job_ref
+      where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
       order by last_seen_at desc nulls last,source_ref limit :n
       """).param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows();
   }
 
   public List<Map<String,Object>> history(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
     return sql.sql("""
-      select * from (
+      select history.*,l.lake_cause_code,coalesce(l.lake_next_action,'NONE') lake_next_action from (
         select r.run_id job_ref,r.source_id source_ref,r.publication_id,r.state run_state,r.failure_code error_code,
           r.correlation_id,r.created_at first_seen_at,r.updated_at last_seen_at,
           r.publication_id is not null and r.publication_id is not distinct from s.publication_id is_current_publication
@@ -33,7 +35,8 @@ public class OperationalAwarenessService {
         select job_ref,source_ref,publication_id,run_state,error_code,correlation_id,null,last_seen_at,true
         from ouf_ingestion.current_source_status where tenant_id=:t and job_ref is null
           and publication_id is not null and (cast(:s as text) is null or source_ref=:s)
-      ) history where (cast(:since as timestamptz) is null or last_seen_at>=:since)
+      ) history left join ouf_ingestion.run_lake_recovery l on l.run_id=history.job_ref
+      where (cast(:since as timestamptz) is null or last_seen_at>=:since)
       order by is_current_publication desc,last_seen_at desc,source_ref,job_ref desc limit :n
       """).param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows();
   }

@@ -40,6 +40,24 @@ public class RunExecutionRepository {
     .param("pressure",pressure).param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new Claim(rs.getObject(1,UUID.class),rs.getString(2),decodeMap(rs.getString(3)),rs.getLong(4),worker,rs.getBoolean(5))).optional();
     if(claimed.isPresent()){
       var c=claimed.orElseThrow();
+      // A worker can die between the POST and defer(). Re-enter the finite partition
+      // budget before admitting a replay, including the time spent on the first write.
+      int recovered=sql.sql("""
+          update ouf_ingestion.ing_partition p set retry_started_at=coalesce((
+              select min(e.intent_at) from ouf_ingestion.lake_write_evidence e
+              where e.run_id=p.run_id and e.partition_key=p.partition_key and e.receipt_ref is null),clock_timestamp()),
+            retry_attempts=1,retry_code='ING_LAKE_RECEIPT_MISSING',retry_at=clock_timestamp()+(:delay*interval '1 second'),lease_owner=null,lease_until=null
+          where p.run_id=:r and p.partition_key=:p and retry_started_at is null and exists(
+            select 1 from ouf_ingestion.lake_write_evidence e where e.run_id=p.run_id and e.partition_key=p.partition_key
+              and (e.receipt_ref is null or e.abort_required or e.human_review))
+          """).param("delay",RetryPolicy.delay(1,0,null)).param("r",c.runId()).param("p",c.partitionKey()).update();
+      if(recovered!=0){
+        sql.sql("""
+            update ouf_ingestion.lake_write_evidence set cause_code='ING_LAKE_RECEIPT_MISSING',cause_at=clock_timestamp()
+            where run_id=:r and partition_key=:p and receipt_ref is null and cause_code is null
+            """).param("r",c.runId()).param("p",c.partitionKey()).update();
+        return Optional.empty();
+      }
       var stop=sql.sql("""
         select case when r.publication_id is not null and not exists(select 1 from ouf_ingestion.ing_schedule s
                where s.schedule_id=r.schedule_id and s.publication_id=r.publication_id and s.publication_enabled
