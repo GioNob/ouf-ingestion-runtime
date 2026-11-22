@@ -293,7 +293,7 @@ class ManagedRepeatabilityRuntimeTest {
         case "non-durable" -> "ING_DATALAKE_NOT_DURABLE";
         case "wrong-hash" -> "ING_LAKE_CONTENT_DIVERGED";
         case "conflict" -> "ING_EXECUTION_GATEWAY_409";
-        case "unusable" -> "UDP_LAKE_DUPLICATE_NOT_USABLE";
+        case "unusable" -> "ING_LAKE_OBJECT_UNUSABLE";
         default -> throw new AssertionError(fault);
       };
       assertThat(writes).hasSize(3);

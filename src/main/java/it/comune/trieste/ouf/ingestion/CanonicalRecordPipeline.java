@@ -125,7 +125,8 @@ public final class CanonicalRecordPipeline {
         // Refusal during a replay cannot undo the original possible write.
         if(intent.fresh())durable.finishLakeWrite(c,suffix,hash,null);
         else durable.recordLakeFailure(c.claim(),c.sequenceNo(),suffix,cause,false,false);
-        throw new RuntimePorts.GatewayFailure(cause,error.errorClass(),error.retryAfter());
+        // Same propagation as the released runtime: a gateway failure pauses the run, any other refusal is a record failure.
+        throw failure;
       }
       if(disposition==Disposition.UNKNOWN)cause="ING_LAKE_OUTCOME_UNKNOWN";
       throw reconcile(c.claim(),c.sequenceNo(),suffix,cause,disposition,error.retryAfter());
@@ -183,7 +184,7 @@ public final class CanonicalRecordPipeline {
       case "ING_WORKLOAD_TOKEN_INVALID","ING_WORKLOAD_TOKEN_UNREADABLE","ING_TOKEN_READ_INTERRUPTED",
            "ING_LAKE_CONTENT_INVALID","ING_LAKE_REQUEST_CONFIG_INVALID","ING_EXECUTION_CONNECT_FAILED",
            "ING_EXECUTION_REQUEST_INVALID","ING_EXECUTION_REQUEST_TOO_LARGE","ING_EXECUTION_SERIALIZATION_FAILED" -> Disposition.UNSENT;
-      case "ING_LAKE_CONTENT_DIVERGED","UDP_LAKE_DUPLICATE_NOT_USABLE" -> Disposition.ABORT;
+      case "ING_LAKE_CONTENT_DIVERGED","ING_LAKE_OBJECT_UNUSABLE" -> Disposition.ABORT;
       case "ING_DATALAKE_NOT_DURABLE","ING_LAKE_RESPONSE_TIMEOUT","ING_LAKE_TRANSPORT_UNCONFIRMED",
            "ING_EXECUTION_RECEIPT_INVALID","ING_RESPONSE_LIMIT" -> Disposition.RETRY;
       case "ING_EXECUTION_TLS_FAILED","ING_EXECUTION_INTERRUPTED" -> Disposition.HUMAN;

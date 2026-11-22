@@ -113,7 +113,7 @@ public class ExecutionGatewayClient implements RuntimePorts.ManagedObjectPort,Ru
     int status=response.statusCode();
     if(status!=expected){
       if(lake && status>=500 && duplicateNotUsable(response.body()))
-        throw failure("UDP_LAKE_DUPLICATE_NOT_USABLE",AdapterSpi.ErrorClass.CONFIGURATION);
+        throw failure("ING_LAKE_OBJECT_UNUSABLE",AdapterSpi.ErrorClass.CONFIGURATION);
       boolean retry=(lake && status==408) || status==429 || status==502 || status==503 || status==504 ||
         (status==202 && "/api/internal/v1/handoffs".equals(path));
       var type=retry?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:status==401||status==403?AdapterSpi.ErrorClass.AUTH_ROUTE:AdapterSpi.ErrorClass.CONFIGURATION;
