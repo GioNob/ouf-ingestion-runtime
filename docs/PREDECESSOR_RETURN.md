@@ -1,6 +1,12 @@
 # Ritorno al predecessore di Ingestion (D-080)
 
-Il predecessore supportato per questo rilascio è `6f0504240b2653e5aa93729ae70cedc52228515d`, in esercizio dal 21 novembre 2026 con schema V21. Il candidato del task-27b conserva V21 e introduce la readiness che gli permetterà di operare come predecessore dopo una migrazione successiva. Il riferimento di CI è lo SHA completo nel job `predecessor-return` di [module-ci.yml](../.github/workflows/module-ci.yml).
+Il predecessore del task 48 ? `8be19a36`, schema V21. Il job `predecessor-return` accetta lo SHA del predecessore della coppia in qualifica. [Workflow del modulo](../.github/workflows/module-ci.yml)
+
+## Task 48, schema V22
+
+La coppia da qualificare per questo candidato parte da `8be19a36`. V22 aggiunge colonne opzionali o con default, indici e la vista `run_lake_recovery`. Il predecessore continua a leggere e scrivere lo schema V21. Il candidato conserva `ING_LAKE_RECONCILE_REQUIRED` come codice generale di pausa riconosciuto dal predecessore. La vista espone la causa specifica e il passo operativo.
+
+Nel job `predecessor-return` la seconda pubblicazione perde una ricevuta della POST NORMALIZED. Il candidato deve ripetere esattamente il corpo, conservare la causa e ottenere la ricevuta. Dopo il ritorno, il predecessore deve completare l'handoff e una terza pubblicazione. La prova richiede il pin del predecessore indicato sopra.
 
 ## Regola per le migrazioni
 
@@ -29,9 +35,9 @@ Il job gira su push e pull request. Nel lancio manuale il parametro `predecessor
 3. Il candidato parte sullo stesso database, applica le proprie migrazioni e legge il run precedente via API. Elabora una seconda pubblicazione. La fixture risponde HTTP 503 con `Retry-After` alla consegna. La CI attende `FAILED_RETRYABLE` persistito e controlla che il watermark punti ancora al primo handoff.
 4. Dopo lo stop del candidato riparte lo stesso container predecessore, con Flyway attivo e `*:future`. La CI richiede readiness `UP` e la stessa cronologia Flyway lasciata dal candidato. Il predecessore deve ritentare la consegna con lo stesso payload, handoff ID e chiave persistita, ottenere l'ACK e avanzare il watermark al secondo handoff.
 5. Le API autenticate `status` e `history` devono restituire gli ID delle pubblicazioni e dei run attesi. Una terza pubblicazione deve completarsi sul predecessore. Il totale finale è di tre run, tre partizioni e tre righe di outbox.
-6. La CI ferma il predecessore e simula il rilascio successivo sullo stesso database. Un container temporaneo usa l’immagine candidata e una directory Flyway aggiuntiva generata sul runner. La migrazione di prova (V21.1 con questo candidato) crea una tabella dedicata. La CI controlla la presenza della tabella, l’unica nuova riga SQL riuscita e l’integrità della cronologia precedente.
+6. La CI ferma il predecessore e simula il rilascio successivo sullo stesso database. Un container temporaneo usa l’immagine candidata e una directory Flyway aggiuntiva generata sul runner. La migrazione di prova (V22.1 con questo candidato) crea una tabella dedicata. La CI controlla la presenza della tabella, l’unica nuova riga SQL riuscita e l’integrità della cronologia precedente.
 7. Fermato il container temporaneo, riparte lo stesso container candidato del passo 3 con le sole migrazioni del rilascio. Il job richiede HTTP 200, readiness `UP`, `FUTURE_MIGRATIONS_PRESENT`, conteggio 1 e cronologia identica a quella del passo 6.
 
 Le scritture passano dai worker di attivazione, acquisizione e consegna dell'immagine. Le interrogazioni di controllo usano una sessione PostgreSQL in sola lettura. Il Gateway di test riprende il trasporto Bearer di `pairwise/r2b_serving.py`, la fixture CSV di `ManagedRepeatabilityRuntimeTest` e il formato di ricevuta firmata di `GatewayReadReceiptVerifierTest`. I peer di Onboarding, Semantic, object storage, Lake e UDP sono simulati sul runner. Token, chiave e grant di lettura sono locali alla prova.
 
-**Sequenza di rilascio.** Il predecessore oggi in esercizio richiede la cronologia V21 esatta anche con `*:future`. Occorre quindi distribuire prima il rilascio del task-27b a schema invariato. Una volta in esercizio, potrà essere il predecessore di un candidato che estende lo schema. Per ogni coppia reale di revisioni, il job dovrà ancora verificare le letture, le scritture e la ripresa dell’handoff sui dati del candidato.
+**Sequenza di rilascio.** Il task 27b ha introdotto la readiness per le migrazioni future a schema V21 invariato. La qualifica del task 48 usa un predecessore che comprende questa readiness. La compatibilit? della coppia richiede l'esito del job sulle due revisioni esatte.

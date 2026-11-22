@@ -58,7 +58,7 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
  public Map<String,Object> attestCompatibility(String source,UUID version,String hash,long rows){return exchange("/api/internal/v1/onboarding/compatibility/ingestion-runtime",Map.of("sourceId",source,"onboardingVersionId",version.toString(),"configurationHash",hash,"compatible",true,"detail","Bounded frozen managed configuration probe PASS; validatedRows="+rows),201);}
  private Map<String,Object> get(String path){return exchange(path,null,200);}
  @SuppressWarnings("unchecked") private Map<String,Object> exchange(String path,Object body,int expected){
-  try{String token=Files.readString(tokenFile).strip();if(token.isEmpty()||token.length()>16384||token.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
+  try{String token=WorkloadTokenFile.read(tokenFile);
    if(Thread.currentThread().isInterrupted())throw new InterruptedException();
    var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString());
    if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));

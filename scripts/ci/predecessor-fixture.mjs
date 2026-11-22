@@ -69,7 +69,7 @@ export async function startFixture(dir) {
   }
   let current;
   const fixture = {
-    deliveries: [], holdAck: false,
+    deliveries: [], holdAck: false, dropLakeReceipt: false, droppedWrite: null, reconciledWrite: false,
     publish(sequence, value, latitude) {
       current = publication(sequence, value, latitude);
       return current.envelope.publicationId;
@@ -102,6 +102,15 @@ export async function startFixture(dir) {
         if (url.pathname === '/api/internal/v1/lake/objects') {
           const hash = 'sha256:' + digest(Buffer.from(body.contentBase64, 'base64'));
           assert.equal(body.contentHash, hash);
+          if (fixture.dropLakeReceipt && body.zone === 'NORMALIZED') {
+            fixture.dropLakeReceipt = false;
+            fixture.droppedWrite = body;
+            return res.destroy();
+          }
+          if (fixture.droppedWrite?.idempotencyKey === body.idempotencyKey) {
+            assert.deepEqual(body, fixture.droppedWrite);
+            fixture.reconciledWrite = true;
+          }
           return reply(201, { durable: true, contentHash: hash, objectRef: 'lake:' + body.idempotencyKey });
         }
         if (url.pathname === '/api/internal/v1/handoffs') {

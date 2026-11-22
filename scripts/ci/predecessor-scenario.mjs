@@ -130,11 +130,13 @@ try {
   assert.deepEqual(upgradedHistory.slice(0, oldHistory.length), oldHistory, 'predecessor history changed');
   await verifyRead('status', [[first, baseline]]);
   fixture.holdAck = true;
+  fixture.dropLakeReceipt = true;
   const second = fixture.publish(2, 'Station', '45.6501234567890123450');
   const pending = await record(second, 'FAILED_RETRYABLE');
   assert.equal(pending.payload_json.canonicalPayload[latitudeProperty], '45.650123456789012345');
   assert.equal(pending.last_error_code, 'ING_EXECUTION_GATEWAY_503');
   assert.equal(pending.attempts, 1);
+  assert.equal(fixture.reconciledWrite, true);
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');
   assert.ok(pending.idempotency_key);
   await docker('stop', '-t', '35', running);
@@ -144,6 +146,8 @@ try {
   await start('old', true);
   assert.deepEqual(await history('new'), upgradedHistory, 'Flyway history changed on return');
   const retried = await record(second, 'ACKED');
+  assert.equal(await sql(`select count(*) from lake_write_evidence where run_id='${retried.run_id}'
+    and cause_code='ING_LAKE_TRANSPORT_UNCONFIRMED' and receipt_ref is not null`), '1');
   verifyAck(retried, 2, 'Station');
   assert.deepEqual(retried.payload_json, pending.payload_json);
   assert.equal(retried.idempotency_key, pending.idempotency_key);

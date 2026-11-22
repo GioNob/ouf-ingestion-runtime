@@ -3,6 +3,10 @@ package it.comune.trieste.ouf.ingestion;
 import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.net.InetSocketAddress;
+import java.nio.file.*;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.io.TempDir;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.atomic.*;
@@ -125,6 +129,26 @@ class ManagedRepeatabilityRuntimeTest {
     assertThat(dispatch()).contains(run);finish(run);assertThat(count("ing_run")).isEqualTo(2);
   }
 
+  @ParameterizedTest @ValueSource(strings={"400","401","403","404","413","422"})
+  void lakeRefusalBeforeAnyEffectLeavesNoAmbiguousIntentAndResumes(String status){
+    publish(1,firstCsv);UUID run=dispatch().orElseThrow();
+    var refused=new AtomicInteger();
+    lake=(zone,r,o,bytes,hash,key)->{
+      if(zone==RuntimePorts.DataLakePort.Zone.CURATED && refused.getAndIncrement()==0)
+        throw new RuntimePorts.GatewayFailure("ING_EXECUTION_GATEWAY_"+status,
+            Set.of("401","403").contains(status)?AdapterSpi.ErrorClass.AUTH_ROUTE:AdapterSpi.ErrorClass.CONFIGURATION);
+      return new RuntimePorts.DataLakePort.Receipt("lake:"+key,true);
+    };
+    assertThat(acquire()).contains(run);
+    assertThat(db.sql("select count(*) from ouf_ingestion.lake_write_evidence where run_id=:r and receipt_ref is null")
+        .param("r",run).query(Long.class).single()).isZero();
+    assertThat(status()).doesNotContainEntry("lake_next_action","ABORT_REQUIRED")
+        .doesNotContainEntry("error_code","ING_LAKE_RECONCILE_REQUIRED");
+    controls().resume(run,0,human,"after-refusal");
+    finish(run);
+    assertThat(status()).containsEntry("lake_next_action","NONE");
+  }
+
   @Test void acquisitionAndLakeRefusalsResumeWithoutNewRunOrRecordError(){
     publish(1,firstCsv);UUID run=dispatch().orElseThrow();
     var reads=new AtomicInteger();objects=(ref,size,hash)->{
@@ -148,6 +172,218 @@ class ManagedRepeatabilityRuntimeTest {
     }
     finish(run);assertThat(calls).containsExactly("RAW","NORMALIZED","NORMALIZED","CURATED");
     assertThat(normalized.getFirst()).isEqualTo(normalized.getLast());assertThat(count("ing_run")).isOne();
+  }
+
+  @TempDir Path directory;
+
+  private void retryDue(){
+    db.sql("update ouf_ingestion.ing_partition set retry_at=clock_timestamp()").update();
+    db.sql("update ouf_ingestion.source_health set retry_not_before=clock_timestamp(),circuit_open_until=null where source_id=:s")
+        .param("s",source).update();
+  }
+
+  @ParameterizedTest @ValueSource(strings={"close","malformed","non-durable","conflict","wrong-hash","unusable"})
+  void lakePostReconcilesOnlyMatchingEvidence(String fault)throws Exception{
+    publish(1,firstCsv);
+    UUID run=dispatch().orElseThrow();
+    Path token=directory.resolve("token");
+    Files.writeString(token,"fixture-token");
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    var writes=new java.util.concurrent.CopyOnWriteArrayList<com.fasterxml.jackson.databind.JsonNode>();
+    server.createContext("/api/internal/v1/lake/objects",exchange->{
+      try{
+        var body=json.readTree(exchange.getRequestBody());
+        writes.add(body);
+        int status=201;
+        byte[] reply=json.writeValueAsBytes(Map.of("durable",true,"objectRef","lake:"+body.path("contentHash").asText(),
+            "contentHash",body.path("contentHash").asText()));
+        if(writes.size()==3)switch(fault){
+          case "close" -> {return;}
+          case "malformed" -> reply="{".getBytes(StandardCharsets.UTF_8);
+          case "non-durable","wrong-hash" -> reply=json.writeValueAsBytes(Map.of("durable",!fault.equals("non-durable"),
+              "objectRef","lake:fixture","contentHash",fault.equals("wrong-hash")?"sha256:"+"0".repeat(64):body.path("contentHash").asText()));
+          case "conflict" -> status=409;
+          case "unusable" -> {status=500;reply=json.writeValueAsBytes(Map.of("message","UDP_LAKE_DUPLICATE_NOT_USABLE"));}
+          default -> throw new AssertionError(fault);
+        }
+        exchange.sendResponseHeaders(status,reply.length);
+        exchange.getResponseBody().write(reply);
+      }finally{exchange.close();}
+    });
+    server.start();
+    try{
+      lake=new ExecutionGatewayClient(json,execution,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString());
+      assertThat(acquire()).contains(run);
+      String cause=switch(fault){
+        case "close" -> "ING_LAKE_TRANSPORT_UNCONFIRMED";
+        case "malformed" -> "ING_EXECUTION_RECEIPT_INVALID";
+        case "non-durable" -> "ING_DATALAKE_NOT_DURABLE";
+        case "wrong-hash" -> "ING_LAKE_CONTENT_DIVERGED";
+        case "conflict" -> "ING_EXECUTION_GATEWAY_409";
+        case "unusable" -> "UDP_LAKE_DUPLICATE_NOT_USABLE";
+        default -> throw new AssertionError(fault);
+      };
+      assertThat(writes).hasSize(3);
+      assertThat(count("handoff_outbox")).isZero();
+      assertThat(count("checkpoint_history")).isZero();
+      assertThat(status()).containsEntry("lake_cause_code",cause);
+      assertThat(operations.history(source,null,10,human).getFirst()).containsEntry("lake_cause_code",cause);
+      assertThat(db.sql("""
+          select error_code,detail_json->>'partitionKey' partition_key,detail_json->>'sequenceNo' sequence_no,
+              detail_json->>'effect' effect from ouf_ingestion.operational_event
+          where run_id=:r and event_type='LAKE_WRITE_FAILURE'
+          """).param("r",run).query().singleRow()).containsEntry("error_code",cause).containsEntry("partition_key","default")
+          .containsEntry("sequence_no","1").containsEntry("effect","curated");
+      assertThat(acquire()).isEmpty();
+      if(Set.of("conflict","wrong-hash","unusable").contains(fault)){
+        assertThat(status()).containsEntry("lake_next_action","ABORT_REQUIRED");
+        assertThatThrownBy(()->controls().resume(run,0,human,"resume")).hasMessage("ING_LAKE_ABORT_REQUIRED");
+        controls().abort(run,0,human,"abort");
+        assertThat(writes).hasSize(3);
+      }else{
+        assertThat(status()).containsEntry("lake_next_action","AUTO_RECONCILING");
+        retryDue();
+        finish(run);
+        assertThat(writes).hasSize(4);
+        assertThat(writes.get(3)).isEqualTo(writes.get(2));
+        assertThat(status()).containsEntry("lake_next_action","NONE").containsEntry("lake_cause_code",cause);
+        assertThat(receipts).hasSize(1);
+      }
+    }finally{server.stop(0);}
+  }
+
+  @Test void opaqueServerErrorBlocksAnIdenticalReplayWithoutInventingAnOwnerCause(){
+    publish(1,firstCsv);
+    UUID run=dispatch().orElseThrow();
+    var keys=new ArrayList<String>();
+    lake=(zone,r,id,bytes,hash,key)->{
+      keys.add(key+" "+hash);
+      throw new RuntimePorts.GatewayFailure("ING_EXECUTION_GATEWAY_500",AdapterSpi.ErrorClass.CONFIGURATION);
+    };
+    assertThat(acquire()).contains(run);
+    assertThat(status()).containsEntry("lake_next_action","HUMAN_RESUME_REQUIRED");
+    controls().resume(run,0,human,"inspect-and-retry");
+    assertThat(acquire()).contains(run);
+    assertThat(status()).containsEntry("lake_next_action","ABORT_REQUIRED").containsEntry("lake_cause_code","ING_EXECUTION_GATEWAY_500");
+    assertThat(keys).hasSize(2);
+    assertThat(keys.getFirst()).isEqualTo(keys.getLast());
+    assertThat(count("checkpoint_history")).isZero();
+  }
+
+  @Test void connectionRefusalCancelsOnlyAFreshIntent()throws Exception{
+    publish(1,firstCsv);
+    UUID run=dispatch().orElseThrow();
+    Path token=directory.resolve("token");
+    Files.writeString(token,"fixture");
+    int closedPort;
+    try(var socket=new java.net.ServerSocket(0,1,java.net.InetAddress.getByName("127.0.0.1"))){
+      closedPort=socket.getLocalPort();
+    }
+    var unavailable=new ExecutionGatewayClient(json,execution,"http://127.0.0.1:"+closedPort,token.toString());
+    lake=unavailable;
+    assertThat(acquire()).contains(run);
+    assertThat(status()).containsEntry("error_code","ING_EXECUTION_CONNECT_FAILED");
+    assertThat(count("lake_write_evidence")).isZero();
+
+    retryDue();
+    lake=(zone,r,id,bytes,hash,key)->new RuntimePorts.DataLakePort.Receipt("lake:fixture",false);
+    assertThat(acquire()).contains(run);
+    assertThat(count("lake_write_evidence")).isOne();
+    retryDue();
+    lake=unavailable;
+    assertThat(acquire()).contains(run);
+    assertThat(count("lake_write_evidence")).isOne();
+    assertThat(status()).containsEntry("lake_next_action","AUTO_RECONCILING");
+    assertThat(count("checkpoint_history")).isZero();
+  }
+
+  @ParameterizedTest @ValueSource(ints={2,25})
+  void workerLossBeforeRetrySchedulingKeepsTheOriginalDeadline(int hours){
+    publish(1,firstCsv);
+    UUID run=dispatch().orElseThrow();
+    var calls=new ArrayList<String>();
+    lake=(zone,r,id,bytes,hash,key)->{
+      calls.add(key+" "+hash);
+      if(calls.size()==1)throw new AssertionError("worker terminated");
+      return new RuntimePorts.DataLakePort.Receipt("lake:"+key,true);
+    };
+    assertThatThrownBy(this::acquire).isInstanceOf(AssertionError.class).hasMessage("worker terminated");
+    db.sql("update ouf_ingestion.ing_partition set lease_until=clock_timestamp()-interval '1 second'").update();
+    db.sql("update ouf_ingestion.lake_write_evidence set intent_at=clock_timestamp()-(:hours*interval '1 hour')")
+        .param("hours",hours).update();
+    assertThat(acquire()).isEmpty();
+    assertThat(calls).hasSize(1);
+    assertThat(status()).containsEntry("run_state","RETRY_WAIT");
+    retryDue();
+    if(hours>24){
+      assertThat(acquire()).isEmpty();
+      assertThat(status()).containsEntry("error_code","ING_RECOVERY_BUDGET_EXHAUSTED")
+          .containsEntry("lake_next_action","HUMAN_RESUME_REQUIRED");
+      assertThat(calls).hasSize(1);
+    }else{
+      finish(run);
+      assertThat(calls).hasSize(4);
+      assertThat(calls.get(1)).isEqualTo(calls.getFirst());
+    }
+  }
+
+  @Test void exhaustedLakeReplayWaitsForANewHumanBudget(){
+    publish(1,firstCsv);
+    UUID run=dispatch().orElseThrow();
+    var lifecycle=controls();
+    lifecycle.pause(run,0,human,"pause");
+    lifecycle.resume(run,1,human,"resume",new RunRecoveryBudget.Request(1,3600,"RECOVER"));
+    var accepted=lake;
+    lake=(zone,r,id,bytes,hash,key)->new RuntimePorts.DataLakePort.Receipt("lake:pending",false);
+    assertThat(acquire()).contains(run);
+    assertThat(status()).containsEntry("error_code","ING_RECOVERY_BUDGET_EXHAUSTED")
+        .containsEntry("lake_cause_code","ING_DATALAKE_NOT_DURABLE").containsEntry("lake_next_action","HUMAN_RESUME_REQUIRED");
+    assertThat(acquire()).isEmpty();
+    assertThat(count("checkpoint_history")).isZero();
+    lifecycle.resume(run,2,human,"renew",new RunRecoveryBudget.Request(1,3600,"LAKE_RECOVERED"));
+    lake=accepted;
+    retryDue();
+    finish(run);
+    assertThat(db.sql("select state from ouf_ingestion.run_recovery_session where run_id=:r order by epoch")
+        .param("r",run).query(String.class).list()).containsExactly("EXHAUSTED","COMPLETED");
+  }
+
+  @ParameterizedTest @ValueSource(booleans={false,true})
+  void humanResumesLegacyLakeIntentFromTheSavedCursor(boolean diverged){
+    publish(1,"id;name\n1;Museum\n2;Station\n");
+    UUID run=dispatch().orElseThrow();
+    var keys=new ArrayList<String>();
+    var hashes=new ArrayList<String>();
+    lake=(zone,r,id,bytes,hash,key)->{
+      keys.add(key);hashes.add(hash);
+      if(keys.size()==6)throw new IllegalStateException("unclassified fixture failure");
+      return new RuntimePorts.DataLakePort.Receipt("lake:"+key,true);
+    };
+    assertThat(acquire()).contains(run);
+    assertThat(count("checkpoint_history")).isOne();
+    assertThat(state.run(run)).containsEntry("failure_code","ING_LAKE_RECONCILE_REQUIRED");
+    // V21 supplied only the hash, cursor and a null receipt.
+    db.sql("update ouf_ingestion.lake_write_evidence set cause_code=null,cause_at=null,intent_at=null,human_review=false where receipt_ref is null").update();
+    assertThat(status()).containsEntry("lake_next_action","HUMAN_RESUME_REQUIRED").containsEntry("lake_cause_code","ING_LAKE_LEGACY_CAUSE_UNKNOWN");
+    if(diverged)db.sql("update ouf_ingestion.lake_write_evidence set content_hash='sha256:'||repeat('0',64) where receipt_ref is null").update();
+    controls().resume(run,0,human,"human-resume",new RunRecoveryBudget.Request(1,3600,"VERIFY_LAKE"));
+    assertThat(acquire()).contains(run);
+    if(diverged){
+      assertThat(keys).hasSize(6);
+      assertThat(status()).containsEntry("lake_next_action","ABORT_REQUIRED").containsEntry("lake_cause_code","ING_LAKE_CONTENT_DIVERGED");
+      assertThat(count("checkpoint_history")).isOne();
+      controls().abort(run,1,human,"abort");
+    }else{
+      assertThat(keys).hasSize(7);
+      assertThat(keys.get(6)).isEqualTo(keys.get(5));
+      assertThat(hashes.get(6)).isEqualTo(hashes.get(5));
+      assertThat(deliver()).isTrue();assertThat(deliver()).isTrue();
+      assertThat(execution.completeDrained()).isOne();
+      assertThat(status()).containsEntry("job_ref",run).containsEntry("run_state","SUCCEEDED");
+      assertThat(count("checkpoint_history")).isEqualTo(2);
+      assertThat(receipts).hasSize(2).doesNotHaveDuplicates();
+    }
+    assertThat(db.sql("select attempts from ouf_ingestion.run_recovery_session where run_id=:r").param("r",run).query(Integer.class).single()).isOne();
   }
 
   @ParameterizedTest @ValueSource(booleans={true,false})

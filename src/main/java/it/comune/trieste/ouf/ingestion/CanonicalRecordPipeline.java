@@ -6,11 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.*;
 import java.util.*;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Record-level boundary: configured mapping, immutable lake evidence, rc3 contracts and durable outbox. */
 public final class CanonicalRecordPipeline {
+  private static final Logger LOG=LoggerFactory.getLogger(CanonicalRecordPipeline.class);
   private static final String ENVELOPE="/contracts/rc3/canonical-data-envelope-v1.json",LINEAGE="/contracts/rc3/lineage-record-v1.json",HANDOFF="/contracts/rc3/handoff-payload-v1.json";
   private final ObjectMapper json;private final FrozenContractValidator contracts;private final DurablePipelineRepository durable;private final QuarantineService quarantine;private final RuntimePorts.DataLakePort lake;private final Clock clock;
   public CanonicalRecordPipeline(ObjectMapper json,FrozenContractValidator contracts,DurablePipelineRepository durable,QuarantineService quarantine,RuntimePorts.DataLakePort lake){this(json,contracts,durable,quarantine,lake,Clock.systemUTC());}
@@ -90,33 +91,100 @@ public final class CanonicalRecordPipeline {
   private Map<String,Object> contractRefs(ExecutionBundle b,Config cfg){Map<String,Object> m=linked("sourceSchemaRef",cfg.sourceSchemaRef(),"bundleRef",bundleRef(b),"semanticPublicationSetRef",cfg.semanticPublicationSetRef(),"adapterProfileRef",cfg.adapterProfileRef());if(!cfg.mappingRefs().isEmpty())m.put("mappingRefs",cfg.mappingRefs());if(!cfg.relationshipResolutionStrategyRefs().isEmpty())m.put("relationshipResolutionStrategyRefs",cfg.relationshipResolutionStrategyRefs());put(m,"authorityPolicyRef",cfg.authorityPolicyRef());return m;}
   private static boolean controlFailure(RuntimeException e){
     return e instanceof RuntimePorts.GatewayFailure || e instanceof AdapterSpi.AdapterException
-      || Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED","ING_LAKE_RECONCILE_REQUIRED").contains(String.valueOf(e.getMessage()));
+      || e instanceof org.springframework.dao.DataAccessException
+      || Set.of("ING_PARTITION_LEASE_LOST","ING_RECOVERY_BUDGET_EXHAUSTED","ING_RECOVERY_CLAIM_REQUIRED","ING_LAKE_EVIDENCE_CONFLICT","ING_LAKE_RECONCILE_REQUIRED").contains(String.valueOf(e.getMessage()));
   }
 
   private RuntimePorts.DataLakePort.Receipt persist(RuntimePorts.DataLakePort.Zone zone,Command c,byte[] content,String hash,String suffix){
     durable.requireRecoveryBudget(c.runId(),c.claim());
-    if(c.claim()!=null){
-      var known=durable.beginLakeWrite(c,suffix,hash);
-      if(known.isPresent())return new RuntimePorts.DataLakePort.Receipt(known.get(),true);
+    String key=idempotency(c,suffix);
+    if(c.claim()==null){
+      var receipt=lake.persist(zone,c.runId(),c.record().sourceObjectId(),content,hash,key);
+      if(!receipt.durable())throw failure("ING_DATALAKE_NOT_DURABLE");
+      return receipt;
     }
+    var intent=durable.beginLakeWrite(c,suffix,hash);
+    if(intent.blocked())throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+    if(!hash.equals(intent.hash()))
+      throw reconcile(c.claim(),c.sequenceNo(),suffix,"ING_LAKE_CONTENT_DIVERGED",Disposition.ABORT,null);
+    if(intent.receipt()!=null)return new RuntimePorts.DataLakePort.Receipt(intent.receipt(),true);
     RuntimePorts.DataLakePort.Receipt receipt;
     try {
-      receipt=lake.persist(zone,c.runId(),c.record().sourceObjectId(),content,hash,idempotency(c,suffix));
-    } catch(RuntimeException failure) {
-      // A refusal has no receipt. Timeout, malformed success, or process death
-      // leaves the intent in place so another worker cannot resend blindly.
-      String code=RunCoordinator.classify(failure).code();
-      if(c.claim()!=null && code.matches("ING_(EXECUTION_)?GATEWAY_(400|401|403|404|422|429|503)")){
-        durable.finishLakeWrite(c,suffix,hash,null);
-      }else if(c.claim()!=null){
-        throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+      receipt=checked(lake.persist(zone,c.runId(),c.record().sourceObjectId(),content,hash,key));
+    }catch(RuntimeException failure){
+      var error=RunCoordinator.classify(failure);
+      String cause=error.code();
+      var disposition=disposition(cause);
+      // UDP may expose an unusable catalog entry as a bare 500 on the matching replay.
+      if(!intent.fresh() && "ING_EXECUTION_GATEWAY_500".equals(cause))disposition=Disposition.ABORT;
+      if(disposition==Disposition.UNSENT){
+        // Refusal during a replay cannot undo the original possible write.
+        if(intent.fresh())durable.finishLakeWrite(c,suffix,hash,null);
+        else durable.recordLakeFailure(c.claim(),c.sequenceNo(),suffix,cause,false,false);
+        throw new RuntimePorts.GatewayFailure(cause,error.errorClass(),error.retryAfter());
       }
-      throw failure;
+      if(disposition==Disposition.UNKNOWN)cause="ING_LAKE_OUTCOME_UNKNOWN";
+      throw reconcile(c.claim(),c.sequenceNo(),suffix,cause,disposition,error.retryAfter());
     }
-    durable.requireRecoveryBudget(c.runId(),c.claim());
-    if(!receipt.durable())throw failure(c.claim()==null?"ING_DATALAKE_NOT_DURABLE":"ING_LAKE_RECONCILE_REQUIRED");
-    if(c.claim()!=null)durable.finishLakeWrite(c,suffix,hash,receipt.objectRef());
+    try{
+      durable.finishLakeWrite(c,suffix,hash,receipt.objectRef());
+    }catch(org.springframework.dao.DataAccessException unavailable){
+      throw reconcile(c.claim(),c.sequenceNo(),suffix,"ING_LAKE_RECEIPT_STORE_UNCONFIRMED",Disposition.HUMAN,null);
+    }
     return receipt;
+  }
+
+  private static RuntimePorts.DataLakePort.Receipt checked(RuntimePorts.DataLakePort.Receipt receipt){
+    if(receipt==null)throw new RuntimePorts.GatewayFailure("ING_EXECUTION_RECEIPT_INVALID",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+    if(!receipt.durable())throw new RuntimePorts.GatewayFailure("ING_DATALAKE_NOT_DURABLE",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+    return receipt;
+  }
+
+  List<DurablePipelineRepository.PendingEffect> pendingEffects(RunExecutionRepository.Claim claim){
+    return durable.pendingEffects(claim);
+  }
+
+  void verifyPending(RunExecutionRepository.Claim claim,List<DurablePipelineRepository.PendingEffect> pending,
+      Long ordinal,boolean rejected){
+    for(var effect:pending){
+      if(effect.sequence()!=pending.getFirst().sequence())break;
+      if(effect.blocked())throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+      boolean expected=rejected?"rejected-raw".equals(effect.effect()):Set.of("raw","normalized","curated").contains(effect.effect());
+      if(ordinal==null || effect.sequence()!=ordinal || !expected)
+        throw reconcile(claim,effect.sequence(),effect.effect(),"ING_LAKE_CONTENT_DIVERGED",Disposition.ABORT,null);
+    }
+  }
+
+  private RuntimeException reconcile(RunExecutionRepository.Claim c,long sequence,String effect,String cause,Disposition disposition,Duration retryAfter){
+    LOG.atWarn()
+        .addKeyValue("event","INGESTION_LAKE_RECONCILE_REQUIRED").addKeyValue("runId",c.runId())
+        .addKeyValue("partition",c.partitionKey()).addKeyValue("sequence",sequence).addKeyValue("effect",effect)
+        .addKeyValue("errorCode","ING_LAKE_RECONCILE_REQUIRED").addKeyValue("causeCode",cause).log("Lake write requires reconciliation");
+    durable.recordLakeFailure(c,sequence,effect,cause,disposition==Disposition.ABORT,
+        disposition==Disposition.HUMAN || disposition==Disposition.UNKNOWN);
+    return new RuntimePorts.GatewayFailure("ING_LAKE_RECONCILE_REQUIRED",
+        disposition==Disposition.RETRY?AdapterSpi.ErrorClass.TRANSIENT_SOURCE:AdapterSpi.ErrorClass.CONFIGURATION,retryAfter);
+  }
+
+  private enum Disposition { UNSENT, RETRY, HUMAN, ABORT, UNKNOWN }
+
+  private static Disposition disposition(String code){
+    if(code==null)return Disposition.UNKNOWN;
+    // Gateway or UDP refused the request before any lake effect (auth, route, size, input or hash check).
+    if(code.matches("ING_(EXECUTION_)?GATEWAY_(400|401|403|404|413|422|429)"))return Disposition.UNSENT;
+    if(code.matches("ING_(EXECUTION_)?GATEWAY_(408|502|503|504)"))return Disposition.RETRY;
+    if(code.matches("ING_(EXECUTION_)?GATEWAY_(4[0-9]{2}|501|505)"))return Disposition.ABORT;
+    if(code.matches("ING_(EXECUTION_)?GATEWAY_[1-5][0-9]{2}"))return Disposition.HUMAN;
+    return switch(code){
+      case "ING_WORKLOAD_TOKEN_INVALID","ING_WORKLOAD_TOKEN_UNREADABLE","ING_TOKEN_READ_INTERRUPTED",
+           "ING_LAKE_CONTENT_INVALID","ING_LAKE_REQUEST_CONFIG_INVALID","ING_EXECUTION_CONNECT_FAILED",
+           "ING_EXECUTION_REQUEST_INVALID","ING_EXECUTION_REQUEST_TOO_LARGE","ING_EXECUTION_SERIALIZATION_FAILED" -> Disposition.UNSENT;
+      case "ING_LAKE_CONTENT_DIVERGED","UDP_LAKE_DUPLICATE_NOT_USABLE" -> Disposition.ABORT;
+      case "ING_DATALAKE_NOT_DURABLE","ING_LAKE_RESPONSE_TIMEOUT","ING_LAKE_TRANSPORT_UNCONFIRMED",
+           "ING_EXECUTION_RECEIPT_INVALID","ING_RESPONSE_LIMIT" -> Disposition.RETRY;
+      case "ING_EXECUTION_TLS_FAILED","ING_EXECUTION_INTERRUPTED" -> Disposition.HUMAN;
+      default -> Disposition.UNKNOWN;
+    };
   }
   private byte[] stableBytes(Object value){
     try{return json.writer().with(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsBytes(value);}

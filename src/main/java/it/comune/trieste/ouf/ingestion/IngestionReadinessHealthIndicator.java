@@ -39,7 +39,8 @@ public final class IngestionReadinessHealthIndicator implements HealthIndicator 
       new Migration("16","V16__incident_observation_time.sql",-405299983),
       new Migration("17","V17__incident_publication_and_cursor.sql",-1241321010),
       new Migration("18","V18__incident_publication_bookmarks.sql",1281376280),
-      new Migration("21","V21__repeatable_managed_publication.sql",-1354813991));
+      new Migration("21","V21__repeatable_managed_publication.sql",-1354813991),
+      new Migration("22","V22__lake_reconciliation.sql",-1453192261));
   private final DataSource source;
   public IngestionReadinessHealthIndicator(DataSource source){this.source=source;}
 
