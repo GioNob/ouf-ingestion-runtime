@@ -1,44 +1,62 @@
 package it.comune.trieste.ouf.ingestion;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 /** Safe, bounded projection of persisted ingestion operational state for MCP/Gateway consumers. */
 @Service
 public class OperationalAwarenessService {
+  private static final String DEFAULT_HUMAN_DECISION_WINDOW = "PT24H";
   private final JdbcClient sql;
-  public OperationalAwarenessService(JdbcClient sql){this.sql=sql;}
+  private final OperationalRecovery recovery;
+  public OperationalAwarenessService(JdbcClient sql){this(sql,DEFAULT_HUMAN_DECISION_WINDOW);}
+  @Autowired
+  public OperationalAwarenessService(JdbcClient sql,
+      @Value("${ouf.ingestion.recovery.human-decision-window:" + DEFAULT_HUMAN_DECISION_WINDOW + "}") String humanDecisionWindow){
+    this.sql=sql;
+    this.recovery=new OperationalRecovery(Duration.parse(humanDecisionWindow));
+  }
 
   public List<Map<String,Object>> status(String source,int limit,TrustedAuthorizationContext.Context actor){
     return sql.sql("""
-      select source_ref,publication_id,schedule_state,health_state,consecutive_failures,error_code,
-             next_retry_at,circuit_open_until,job_ref,control_version,run_state,last_seen_at,correlation_id,
-             l.lake_cause_code,coalesce(l.lake_next_action,'NONE') lake_next_action
-      from ouf_ingestion.current_source_status cs left join ouf_ingestion.run_lake_recovery l on l.run_id=cs.job_ref
-      where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
-      order by last_seen_at desc nulls last,source_ref limit :n
-      """).param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows();
+      with page as materialized (
+        select tenant_id,source_ref,publication_id,schedule_state,health_state,consecutive_failures,error_code,
+               next_retry_at,circuit_open_until,job_ref,control_version,run_state,last_seen_at,correlation_id,
+               true project_schedule
+        from ouf_ingestion.current_source_status
+        where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
+        order by last_seen_at desc nulls last,source_ref limit :n
+      )
+      """+OperationalRecovery.SELECT+" order by page.last_seen_at desc nulls last,page.source_ref")
+      .param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows()
+      .stream().map(recovery::project).toList();
   }
 
   public List<Map<String,Object>> history(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
     return sql.sql("""
-      select history.*,l.lake_cause_code,coalesce(l.lake_next_action,'NONE') lake_next_action from (
-        select r.run_id job_ref,r.source_id source_ref,r.publication_id,r.state run_state,r.failure_code error_code,
-          r.correlation_id,r.created_at first_seen_at,r.updated_at last_seen_at,
-          r.publication_id is not null and r.publication_id is not distinct from s.publication_id is_current_publication
-        from ouf_ingestion.ing_run r left join ouf_ingestion.ing_schedule s
-          on s.tenant_id=r.tenant_id and s.source_id=r.source_id
-        where r.tenant_id=:t and (cast(:s as text) is null or r.source_id=:s)
-        union all
-        select job_ref,source_ref,publication_id,run_state,error_code,correlation_id,null,last_seen_at,true
-        from ouf_ingestion.current_source_status where tenant_id=:t and job_ref is null
-          and publication_id is not null and (cast(:s as text) is null or source_ref=:s)
-      ) history left join ouf_ingestion.run_lake_recovery l on l.run_id=history.job_ref
-      where (cast(:since as timestamptz) is null or last_seen_at>=:since)
-      order by is_current_publication desc,last_seen_at desc,source_ref,job_ref desc limit :n
-      """).param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows();
+      with page as materialized (
+        select history.*, is_current_publication project_schedule from (
+          select r.tenant_id,r.run_id job_ref,r.source_id source_ref,r.publication_id,r.state run_state,r.failure_code error_code,
+            r.correlation_id,r.created_at first_seen_at,r.updated_at last_seen_at,
+            r.publication_id is not null and r.publication_id is not distinct from s.publication_id is_current_publication
+          from ouf_ingestion.ing_run r left join ouf_ingestion.ing_schedule s
+            on s.tenant_id=r.tenant_id and s.source_id=r.source_id
+          where r.tenant_id=:t and (cast(:s as text) is null or r.source_id=:s)
+          union all
+          select tenant_id,job_ref,source_ref,publication_id,run_state,error_code,correlation_id,null,last_seen_at,true
+          from ouf_ingestion.current_source_status where tenant_id=:t and job_ref is null
+            and publication_id is not null and (cast(:s as text) is null or source_ref=:s)
+        ) history where (cast(:since as timestamptz) is null or last_seen_at>=:since)
+        order by is_current_publication desc,last_seen_at desc,source_ref,job_ref desc limit :n
+      )
+      """+OperationalRecovery.SELECT+" order by page.is_current_publication desc,page.last_seen_at desc,page.source_ref,page.job_ref desc")
+      .param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows()
+      .stream().map(recovery::project).toList();
   }
 
   public List<Map<String,Object>> incidents(String state,String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
