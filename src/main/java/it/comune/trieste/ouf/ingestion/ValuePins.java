@@ -3,12 +3,15 @@ package it.comune.trieste.ouf.ingestion;
 import com.fasterxml.jackson.databind.*;
 import java.math.*;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.*;
 import java.util.*;
 
 /** Immutable evidence and component specifications for a single bundle. */
 final class ValuePins {
+  private static final int MAX_VALUE_MAP_DEFINITION_BYTES = 786_432;
+  private static final int MAX_VALUE_MAP_BUNDLE_BYTES = 1_048_576;
   static final ValuePins EMPTY = new ValuePins(Map.of(), Map.of(), Map.of(), Map.of());
   static final Set<String> BASE = Set.of("string","integer","decimal","boolean","date","datetime","geometry","concept");
   private final Map<String,Map<String,Component>> definitions;
@@ -38,6 +41,7 @@ final class ValuePins {
     var unique = new HashMap<String,String>();
     var coordinates = new HashSet<String>();
     var vocabularies = new HashMap<String,String>();
+    int valueMapBytes = 0;
     for (Object raw : bindings) {
       var pin = object(raw);
       String id = string(pin,"semanticId");
@@ -46,7 +50,15 @@ final class ValuePins {
       unique.merge(id,ref,(first,second) -> "");
       if (pin.containsKey("valueMapRef")) {
         require(ref.equals(pin.get("valueMapRef")));
-        maps.put(ref,mapContents(pin));
+        requireMapContent(pin);
+        var definition = object(pin.get("definition"));
+        byte[] canonical = canonicalBytes(definition);
+        if (canonical.length > MAX_VALUE_MAP_BUNDLE_BYTES - valueMapBytes)
+          throw new IllegalArgumentException("ING_VALUE_MAP_LIMIT_EXCEEDED");
+        valueMapBytes += canonical.length;
+        require(canonical.length <= MAX_VALUE_MAP_DEFINITION_BYTES
+            && digest(canonical).equals(pin.get("definitionSha256")));
+        maps.put(ref,mapContents(pin, definition));
       } else if (pin.containsKey("definitionSha256")) {
         require(absolute(id));
         schemas.put(ref,components(checkedDefinition(pin)));
@@ -87,9 +99,7 @@ final class ValuePins {
     return definition;
   }
 
-  private static ValueMap mapContents(Map<?,?> pin) {
-    requireMapContent(pin);
-    var definition = checkedDefinition(pin);
+  private static ValueMap mapContents(Map<?,?> pin, Map<?,?> definition) {
     require(Set.of("targetVocabulary","entries","labels").containsAll(definition.keySet()));
     String target = string(definition,"targetVocabulary");
     require(target.equals(pin.get("targetVocabulary")));
@@ -108,9 +118,11 @@ final class ValuePins {
     for (Object item : items) {
       var entry = object(item);
       require(entry.keySet().equals(Set.of("code","concept")));
-      String code = string(entry,"code"), concept = string(entry,"concept");
-      require(code.codePointCount(0,code.length()) <= 128 && code.equals(code.strip())
-          && code.chars().noneMatch(c -> c <= 0x1f || c == 0x7f) && absolute(concept));
+      String concept = string(entry,"concept");
+      require(concept.codePointCount(0,concept.length()) <= 512 && absolute(concept));
+      if (!(entry.get("code") instanceof String code)) throw error();
+      require(!code.isEmpty() && code.codePointCount(0,code.length()) <= 128 && code.equals(CellWhitespace.trim(code))
+          && code.chars().noneMatch(Character::isISOControl));
       require(previous == null || previous.compareTo(code) < 0);
       entries.put(code,concept);
       previous = code;
@@ -119,9 +131,17 @@ final class ValuePins {
   }
   private static final ObjectWriter WRITER = new ObjectMapper().writer(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
       .without(SerializationFeature.INDENT_OUTPUT);
+  private static byte[] canonicalBytes(Map<?,?> definition) {
+    // Use the same character serialization and UTF-8 encoding as the Registry digest.
+    try { return WRITER.writeValueAsString(definition).getBytes(StandardCharsets.UTF_8); }
+    catch (com.fasterxml.jackson.core.JsonProcessingException invalid) { throw error(); }
+  }
   static String digest(Map<?,?> definition) {
-    try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(WRITER.writeValueAsBytes(definition))); }
-    catch (Exception invalid) { throw error(); }
+    return digest(canonicalBytes(definition));
+  }
+  private static String digest(byte[] canonical) {
+    try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical)); }
+    catch (java.security.NoSuchAlgorithmException invalid) { throw error(); }
   }
   private static String publication(Map<?,?> pin) {
     String set = string(pin,"publicationSetId");

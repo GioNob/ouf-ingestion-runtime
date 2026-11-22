@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
@@ -13,6 +14,7 @@ import org.springframework.test.context.*;
 @SpringBootTest class DurableAckTest {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ING_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ING_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ING_DB_PASSWORD"));}
   @Autowired DurablePipelineRepository repository; @Autowired JdbcClient sql;
+  @Autowired ObjectMapper json;
   private final Map<UUID,String> sources=new HashMap<>();
   @AfterEach void closeOutboxFixtures(){for(UUID run:sources.keySet())sql.sql("update ouf_ingestion.handoff_outbox set state='ACKED',acked_at=transaction_timestamp(),lease_owner=null,lease_until=null where run_id=:r and state<>'ACKED'").param("r",run).update();sources.clear();}
 
@@ -36,18 +38,27 @@ import org.springframework.test.context.*;
 
   @Test void expiredDeliveringLeaseIsReclaimedAfterCrash(){UUID handoff=stage(run(),1);var lost=repository.claim("crashed",Duration.ofMinutes(1)).orElseThrow();assertThat(lost.handoffId()).isEqualTo(handoff);sql.sql("update ouf_ingestion.handoff_outbox set lease_until=transaction_timestamp()-interval '1 second' where handoff_id=:h").param("h",handoff).update();assertThat(repository.claim("recovery",Duration.ofMinutes(1)).orElseThrow().handoffId()).isEqualTo(handoff);}
 
-  @Test void geometryCoordinatesRemainExactOnOutboxRedelivery(){
+  @Test void geometryCoordinatesRemainExactOnOutboxRedelivery() throws Exception {
     UUID run=run();
     var point=ValueGeometry.point(new BigDecimal("13.778765432109876543"),new BigDecimal("45.650123456789012345"));
-    var payload=Map.<String,Object>of("canonicalPayload",Map.of("urn:location",point));
+    var small=ValueGeometry.point(new BigDecimal("0.000001"),BigDecimal.ZERO);
+    var payload=Map.<String,Object>of("canonicalPayload",Map.of("urn:location",point,"urn:small",small));
+    assertThat(json.writeValueAsString(payload)).contains("[13.778765432109877,45.65012345678901]","[0.000001,0]");
     UUID id=repository.stage(command(run,1,"geometry-"+run,payload));
+    String stored=sql.sql("select payload_json::text from ouf_ingestion.handoff_outbox where handoff_id=:h")
+        .param("h",id).query(String.class).single();
+    // The deployed revision deserializes the stored JSONB into an untyped Map.
+    var predecessorBytes=json.writeValueAsBytes(json.readValue(stored,Map.class));
     var first=repository.claim("first",Duration.ofMinutes(1)).orElseThrow();
     assertThat(first.handoffId()).isEqualTo(id);
-    assertThat(first.payload()).isEqualTo(payload);
+    assertThat(json.writeValueAsBytes(first.payload())).isEqualTo(predecessorBytes);
+    var coordinates=json.valueToTree(first.payload()).at("/canonicalPayload/urn:location/geoJson/coordinates");
+    assertThat(coordinates.get(0).doubleValue()).isEqualTo(13.778765432109877);
+    assertThat(coordinates.get(1).doubleValue()).isEqualTo(45.65012345678901);
     repository.retry(id,"first","ING_DOWNSTREAM_UNAVAILABLE",Duration.ZERO,false);
     var next=repository.claim("next",Duration.ofMinutes(1)).orElseThrow();
     assertThat(next.handoffId()).isEqualTo(id);
-    assertThat(next.payload()).isEqualTo(payload);
+    assertThat(json.writeValueAsBytes(next.payload())).isEqualTo(predecessorBytes);
   }
 
   @Test void expiredOrSupersededExecutionCannotStageOrAdvanceCheckpoint(){

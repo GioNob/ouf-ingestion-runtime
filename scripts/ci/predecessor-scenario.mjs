@@ -126,7 +126,7 @@ function verifyCandidateValues(row, body) {
   });
   // Inspect the original numeric tokens before JSON.parse can round them to a JS Number.
   const tokens = body.match(/"coordinates"\s*:\s*\[([^\]]+)\]/)?.[1].split(',').map(value => value.trim());
-  assert.deepEqual(tokens, coordinates);
+  assert.deepEqual(tokens, coordinates.map(value => String(Number(value))));
 }
 
 try {
@@ -161,6 +161,7 @@ try {
   const retried = await record(second, 'ACKED');
   verifyAck(retried, 2, 'Station');
   verifyCandidateValues(retried, fixture.deliveryBodies[2]);
+  assert.equal(fixture.deliveryBodies[2], fixture.deliveryBodies[1], 'HTTP handoff changed on predecessor redelivery');
   assert.deepEqual(retried.payload_json, pending.payload_json);
   assert.equal(retried.idempotency_key, pending.idempotency_key);
   await verifyRead('status', [[second, retried]]);

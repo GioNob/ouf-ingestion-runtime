@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.ingestion;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -8,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -17,13 +19,13 @@ class OnboardingValueTransformContractTest {
   @Test void sharedContractHasGovernedDigest() throws Exception {
     byte[] bytes = Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json"));
     assertThat(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)))
-        .isEqualTo("4b90e85ecd1573404612ef0a0ee627feffaa9c189fe4363e82079bd07824c333");
+        .isEqualTo("3b85052e253b985f1082527eb595d2f02e5336047203deb3503a9766c1324295");
   }
 
   @Test void sharedValueMapContractHasGovernedDigest() throws Exception {
     byte[] bytes = Files.readAllBytes(Path.of("contracts/ouf-value-maps-v1.json"));
     assertThat(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)))
-        .isEqualTo("2f4528eb4c9c6bd9d2c6345464c8292f0cb3f36834cb2f54f81ae20e3dbe4a71");
+        .isEqualTo("40b247ad3422e09245a8314fdcc59ffe0b039e25733a2ca8f31aa6ba03ff2d2e");
   }
 
   private static final String XSD = "http://www.w3.org/2001/XMLSchema#";
@@ -59,6 +61,10 @@ class OnboardingValueTransformContractTest {
     Path owner = checkout.resolve("contracts/ouf-value-types-v1.json");
     if (!Files.notExists(owner)) {
       assertThat(Files.readAllBytes(owner)).isEqualTo(Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json")));
+      Path ownerMaps = checkout.resolve("contracts/ouf-value-maps-v1.json");
+      if (Files.exists(ownerMaps)) {
+        assertThat(Files.readAllBytes(ownerMaps)).isEqualTo(Files.readAllBytes(Path.of("contracts/ouf-value-maps-v1.json")));
+      }
       return;
     }
     // The owner can roll out D-084 after Ingestion. Keep checking the deployed vocabulary until then.
@@ -86,5 +92,33 @@ class OnboardingValueTransformContractTest {
     assertThat(types.keySet()).containsExactlyInAnyOrderElementsOf(
         Arrays.stream(ConfiguredValueTransform.values()).map(Enum::name).toList());
     types.forEach((id,type) -> assertThat(ConfiguredValueTransform.resolve(id).output).isEqualTo(type));
+  }
+
+  @Test void sharedWhitespaceVectorsRunThroughCellReaders() throws IOException {
+    var vectors = new ObjectMapper().readTree(Path.of("contracts/ouf-value-types-v1.json").toFile())
+        .required("whitespace").required("vectors");
+    String set = "00000000-0000-0000-0000-000000000001";
+    String ref = "urn:map@" + set;
+    String target = "urn:vocabulary@" + set;
+    String concept = "urn:concept:A1";
+    var definition = Map.of("targetVocabulary", target, "entries", List.of(Map.of("code", "A1", "concept", concept)));
+    var pins = ValuePins.embedded(List.of(Map.of("semanticId", "urn:map", "publicationSetId", set, "revisionId", set,
+        "valueMapRef", ref, "targetVocabulary", target, "definition", definition, "definitionSha256", ValuePins.digest(definition))));
+    for (var vector : vectors) {
+      var rule = ConfiguredValueTransform.resolve(vector.required("reader").asText());
+      var reader = rule.bind(rule == ConfiguredValueTransform.VALUE_MAP_V1 ? Map.of("valueMapRef", ref) : Map.of(), pins);
+      String cell = vector.required("cell").asText();
+      String expected = vector.required("result").asText();
+      switch (expected) {
+        case "INVALID" -> {
+          var error = assertThrows(ConfiguredValueTransform.InvalidValue.class, () -> reader.apply(cell, 7));
+          assertThat(error.getMessage()).isEqualTo("ING_TRANSFORM_VALUE_INVALID");
+          assertThat(error.rowOrdinal()).isEqualTo(7L);
+        }
+        case "ABSENT" -> assertThat(reader.apply(cell, 7)).as(rule.name()).isNull();
+        case "concept mapped from code 'A1'" -> assertThat(reader.apply(cell, 7)).isEqualTo(concept);
+        default -> assertThat(reader.apply(cell, 7)).as(rule.name()).isEqualTo(expected);
+      }
+    }
   }
 }

@@ -2,6 +2,7 @@ package it.comune.trieste.ouf.ingestion;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static it.comune.trieste.ouf.ingestion.ConfiguredValueTransform.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.*;
 import org.junit.jupiter.api.Test;
@@ -65,15 +66,16 @@ class ConfiguredValueMappingTest {
     bad(()->INTEGER_GROUP_DOT_V1.apply("123.45",1),"ING_TRANSFORM_VALUE_INVALID");
   }
 
-  @Test void geometryReadersPreserveNumbersAndRejectMalformedGeometries() {
+  @Test void geometryReadersPreserveNumbersAndRejectMalformedGeometries() throws Exception {
+    var json = new ObjectMapper();
     var wkt = WKT_V1.bind(Map.of("crs","EPSG:3857"),ValuePins.EMPTY);
-    var point = Map.of("type","Point","coordinates",List.of(new BigDecimal("100.0000000000000001"),new BigDecimal("200")));
-    assertEquals(Map.of("crs","EPSG:3857","geoJson",point),wkt.apply("POINT(100.0000000000000001 200)",1));
+    assertEquals("{\"crs\":\"EPSG:3857\",\"geoJson\":{\"type\":\"Point\",\"coordinates\":[100,200]}}",
+        json.writeValueAsString(wkt.apply("POINT(100.0000000000000001 200)",1)));
     for (String w : List.of("MULTIPOINT ((1 2),(3 4))","MULTILINESTRING ((1 2,3 4))",
         "MULTIPOLYGON (((0 0,1 0,1 1,0 0)))","GEOMETRYCOLLECTION (POINT EMPTY,LINESTRING (0 0,1 1))"))
       assertNotNull(wkt.apply(w,1));
-    assertEquals(Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(1,2))),
-        GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1,2]}",1));
+    assertEquals("{\"crs\":\"EPSG:4326\",\"geoJson\":{\"type\":\"Point\",\"coordinates\":[1,2]}}",
+        json.writeValueAsString(GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1,2]}",1)));
     for (String w : List.of("POINT(1 2) trailing","POINT(1)","LINESTRING(1 2)","POLYGON ((0 0,1 0,1 1,0 1))","POINT M(1 2 3)"))
       bad(()->wkt.apply(w,1),"ING_TRANSFORM_VALUE_INVALID");
     for (String g : List.of("null","{\"type\":\"Feature\"}","{\"type\":\"LineString\",\"coordinates\":[[1,2]]}",
@@ -82,6 +84,23 @@ class ConfiguredValueMappingTest {
         "{\"type\":\"Point\",\"coordinates\":[1,2]} {}"))
       bad(()->GEOJSON_V1.apply(g,1),"ING_TRANSFORM_VALUE_INVALID");
     bad(()->WKT_V1.bind(Map.of(),ValuePins.EMPTY),"ING_TRANSFORM_PARAMS_INVALID");
+  }
+
+  @Test void geometryUsesShortestBinary64CoordinatesAtDecimalAndExponentBoundaries() throws Exception {
+    var json = new ObjectMapper();
+    var wkt = WKT_V1.bind(Map.of("crs","EPSG:4326"),ValuePins.EMPTY);
+    var source = "LINESTRING Z(-0.00 0.000001 4.9e-324,1e-7 1e21 9007199254740993)";
+    var geometry = wkt.apply(source,1);
+    assertEquals("{\"crs\":\"EPSG:4326\",\"geoJson\":{\"type\":\"LineString\","
+        + "\"coordinates\":[[0,0.000001,5e-324],[1e-7,1e+21,9007199254740992]]}}", json.writeValueAsString(geometry));
+    assertEquals(geometry, GEOJSON_V1.apply("""
+        {"type":"LineString","coordinates":[[-0.00,0.000001,4.9e-324],[1e-7,1e21,9007199254740993]]}
+        """,1));
+    var coordinates = json.valueToTree(geometry).at("/geoJson/coordinates");
+    assertEquals(Double.MIN_VALUE,coordinates.get(0).get(2).doubleValue());
+    assertEquals(1e21,coordinates.get(1).get(1).doubleValue());
+    bad(() -> wkt.apply("POINT (1e309 0)",1),"ING_TRANSFORM_VALUE_INVALID");
+    bad(() -> GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1e309,0]}",1),"ING_TRANSFORM_VALUE_INVALID");
   }
 
   @Test void wktRejectsMeasureOrdinatesWithSafeRowError() {
@@ -237,7 +256,9 @@ class ConfiguredValueMappingTest {
     var tooMany = new ArrayList<>(maximum);
     tooMany.add(Map.of("code","3000","concept","urn:concept"));
     for (var entries : List.<List<?>>of(List.of(),tooMany,List.of(upper,upper),List.of(lower,upper),List.of(bmp,supplementary),
-        List.of(with(upper,"code"," A")),List.of(with(upper,"code","a\u007F")),List.of(with(upper,"code","x".repeat(129))),
+        List.of(with(upper,"code","\u00a0A")),List.of(with(upper,"code","a\u007F")),List.of(with(upper,"code","a\u0081")),
+        List.of(with(upper,"code","a\u009F")),List.of(with(upper,"code","x".repeat(129))),
+        List.of(with(upper,"concept","urn:"+"x".repeat(509))),
         List.of(with(upper,"concept","relative")),List.of(with(upper,"extra",true)))) {
       bad(() -> ValuePins.embedded(List.of(valueMapPin(VOCAB,entries))),"ING_VALUE_DEFINITION_INVALID");
     }
@@ -247,8 +268,30 @@ class ConfiguredValueMappingTest {
   private static Map<String,Object> valueMapPin(String vocabulary,List<?> entries) {
     var target = vocabulary+"@"+new UUID(0,7);
     var definition = Map.of("targetVocabulary",target,"entries",entries,"labels",Map.of("it","Valori"));
-    return Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef",MAP,"targetVocabulary",target,
+    return valueMapPin("urn:map", definition);
+  }
+
+  private static Map<String,Object> valueMapPin(String id, Map<String,Object> definition) {
+    return Map.of("semanticId",id,"publicationSetId",SET,"valueMapRef",id+"@"+SET,"targetVocabulary",definition.get("targetVocabulary"),
         "revisionId",new UUID(0,8).toString(),"definition",definition,"definitionSha256",ValuePins.digest(definition));
+  }
+
+  @Test void publishedValueMapsEnforceCanonicalUtf8ByteLimitsPerDefinitionAndBundle() {
+    var first = sizedValueMapPin("urn:map", 786_432);
+    var second = sizedValueMapPin("urn:other", 262_144);
+    assertEquals("urn:concept", ValuePins.embedded(List.of(first,second)).valueMap(MAP).entries().get("A"));
+    bad(() -> ValuePins.embedded(List.of(first,sizedValueMapPin("urn:other", 262_145))),"ING_VALUE_MAP_LIMIT_EXCEEDED");
+    bad(() -> ValuePins.embedded(List.of(sizedValueMapPin("urn:map", 786_433))),"ING_VALUE_DEFINITION_INVALID");
+  }
+
+  private static Map<String,Object> sizedValueMapPin(String id, int bytes) {
+    String target = VOCAB+"@"+new UUID(0,7);
+    String empty = "{\"entries\":[{\"code\":\"A\",\"concept\":\"urn:concept\"}],\"labels\":{\"it\":\"\"},\"targetVocabulary\":\""+target+"\"}";
+    int labelBytes = bytes - empty.length(); // The fixed part is ASCII.
+    String label = "\uD83D\uDE00".repeat(labelBytes / 4) + "x".repeat(labelBytes % 4);
+    var definition = Map.<String,Object>of("targetVocabulary",target,"entries",List.of(Map.of("code","A","concept","urn:concept")),
+        "labels",Map.of("it",label));
+    return valueMapPin(id, definition);
   }
 
   @Test void canonicalBoundsApplyChronologicallyAndNumerically() {

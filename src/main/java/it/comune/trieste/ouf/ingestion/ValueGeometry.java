@@ -1,13 +1,18 @@
 package it.comune.trieste.ouf.ingestion;
 
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.regex.*;
 
-/** Parses geometry cells into JSON numbers without a floating point round trip. */
+/** Parses geometry cells and emits canonical binary64 coordinates. */
 final class ValueGeometry {
   private static final ObjectMapper JSON = new ObjectMapper()
       .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS, DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -16,7 +21,7 @@ final class ValueGeometry {
       "MultiLineString","MultiPolygon","GeometryCollection");
 
   static Map<String,Object> point(BigDecimal lon, BigDecimal lat) {
-    return wrap("EPSG:4326", geometry("Point", List.of(lon, lat)));
+    return wrap("EPSG:4326", geometry("Point", List.of(coordinate(lon), coordinate(lat))));
   }
   private static Map<String,Object> geometry(String type, Object data) {
     var result = new LinkedHashMap<String,Object>();
@@ -34,56 +39,61 @@ final class ValueGeometry {
   static Object geoJson(String text, long row) {
     try {
       var geo = JSON.readValue(text, Map.class);
-      validate(geo, 0);
-      return wrap("EPSG:4326", geo);
+      return wrap("EPSG:4326", canonicalGeometry(geo, 0));
     } catch (JsonProcessingException | IllegalArgumentException invalid) {
       throw new ConfiguredValueTransform.InvalidValue(row);
     }
   }
 
-  private static void validate(Map<?,?> geo, int depth) {
+  private static Map<String,Object> canonicalGeometry(Map<?,?> geo, int depth) {
     require(depth < 128 && geo != null && geo.get("type") instanceof String);
     String type = (String) geo.get("type");
     require(TYPES.contains(type) && !geo.containsKey("crs") && !geo.containsKey("features")
         && !geo.containsKey("geometry") && !geo.containsKey("properties"));
     boolean collection = type.equals("GeometryCollection");
+    String dataKey = collection ? "geometries" : "coordinates";
     require(!geo.containsKey(collection ? "coordinates" : "geometries"));
-    List<?> data = list(geo.get(collection ? "geometries" : "coordinates"));
+    List<?> data = list(geo.get(dataKey));
+    var canonical = new LinkedHashMap<String,Object>();
+    geo.forEach((key,value) -> canonical.put((String) key, value));
     if (geo.containsKey("bbox")) {
       var bbox = list(geo.get("bbox"));
-      require(bbox.size() >= 4 && bbox.size() % 2 == 0 && bbox.stream().allMatch(Number.class::isInstance));
+      require(bbox.size() >= 4 && bbox.size() % 2 == 0);
+      canonical.put("bbox", bbox.stream().map(ValueGeometry::coordinate).toList());
     }
     if (collection) {
+      var members = new ArrayList<>();
       for (Object member : data) {
         if (!(member instanceof Map<?,?> geometry)) throw new IllegalArgumentException();
-        validate(geometry, depth + 1);
+        members.add(canonicalGeometry(geometry, depth + 1));
       }
-    } else if (!data.isEmpty()) coordinates(type, data);
+      canonical.put(dataKey, members);
+    } else if (!data.isEmpty()) {
+      canonical.put(dataKey, coordinates(type, data));
+    }
+    return canonical;
   }
-  private static void coordinates(String type, List<?> data) {
-    switch (type) {
-      case "Point" -> require(data.size() >= 2 && data.stream().allMatch(Number.class::isInstance));
+  private static List<?> coordinates(String type, List<?> data) {
+    return switch (type) {
+      case "Point" -> {
+        require(data.size() >= 2);
+        yield data.stream().map(ValueGeometry::coordinate).toList();
+      }
       case "LineString", "MultiPoint" -> {
         if (type.equals("LineString")) require(data.size() >= 2);
-        for (Object p : data) coordinates("Point", list(p));
+        yield data.stream().map(p -> coordinates("Point", list(p))).toList();
       }
       case "Polygon" -> {
-        for (Object item : data) {
-          var ring = list(item);
-          require(ring.size() >= 4);
-          coordinates("LineString", ring);
-          var first = list(ring.getFirst());
-          var last = list(ring.getLast());
-          require(first.size() == last.size());
-          for (int i = 0; i < first.size(); i++)
-            require(new BigDecimal(first.get(i).toString()).compareTo(new BigDecimal(last.get(i).toString())) == 0);
-        }
+        yield data.stream().map(item -> {
+          var ring = coordinates("LineString", list(item));
+          require(ring.size() >= 4 && ring.getFirst().equals(ring.getLast()));
+          return ring;
+        }).toList();
       }
-      case "MultiLineString", "MultiPolygon" -> {
-        for (Object member : data) coordinates(type.substring(5), list(member));
-      }
+      case "MultiLineString", "MultiPolygon" ->
+          data.stream().map(member -> coordinates(type.substring(5), list(member))).toList();
       default -> throw new IllegalArgumentException();
-    }
+    };
   }
   private static List<?> list(Object value) {
     if (value instanceof List<?> values) return values;
@@ -91,13 +101,41 @@ final class ValueGeometry {
   }
   private static void require(boolean ok) { if (!ok) throw new IllegalArgumentException(); }
 
+  private static Coordinate coordinate(Object source) {
+    if (!(source instanceof Number number)) throw new IllegalArgumentException();
+    double value = number.doubleValue();
+    require(Double.isFinite(value));
+    return new Coordinate(value == 0 ? 0 : value);
+  }
+
+  @JsonSerialize(using = CoordinateSerializer.class)
+  private record Coordinate(double value) {}
+
+  static final class CoordinateSerializer extends JsonSerializer<Coordinate> {
+    @Override
+    public void serialize(Coordinate coordinate, JsonGenerator generator, SerializerProvider provider) throws IOException {
+      generator.writeNumber(shortest(coordinate.value()));
+    }
+
+    private static String shortest(double value) {
+      var decimal = BigDecimal.valueOf(value).stripTrailingZeros();
+      // Java 21 considers two digits even when one can round-trip. ECMAScript prefers one.
+      if (decimal.precision() == 2) {
+        var oneDigit = new BigDecimal(value).round(new MathContext(1, RoundingMode.HALF_EVEN));
+        if (oneDigit.doubleValue() == value) decimal = oneDigit;
+      }
+      int exponent = decimal.precision() - decimal.scale() - 1;
+      if (exponent >= -6 && exponent < 21) return decimal.toPlainString();
+      return decimal.scaleByPowerOfTen(-exponent).toPlainString() + "e" + (exponent >= 0 ? "+" : "") + exponent;
+    }
+  }
+
   static Object wkt(String text, String crs, long row) {
     try {
       var parser = new Wkt(text);
       var result = parser.readGeometry(0, 0);
       require(parser.end());
-      validate(result, 0);
-      return wrap(crs, result);
+      return wrap(crs, canonicalGeometry(result, 0));
     } catch (IllegalArgumentException invalid) { throw new ConfiguredValueTransform.InvalidValue(row); }
   }
 
@@ -107,7 +145,7 @@ final class ValueGeometry {
     private final String text;
     private int offset;
     Wkt(String text) { this.text = text; }
-    private void space() { while (offset < text.length() && Character.isWhitespace(text.charAt(offset))) offset++; }
+    private void space() { while (offset < text.length() && CellWhitespace.contains(text.charAt(offset))) offset++; }
     boolean end() { space(); return offset == text.length(); }
     private boolean take(char token) {
       space();
@@ -158,13 +196,13 @@ final class ValueGeometry {
       } while (take(','));
       return values;
     }
-    private List<BigDecimal> position(int[] dimension) {
-      var numbers = new ArrayList<BigDecimal>();
+    private List<Double> position(int[] dimension) {
+      var numbers = new ArrayList<Double>();
       do {
         String number = token(NUMBER);
         if (number.isEmpty()) break;
-        numbers.add(new BigDecimal(number));
-      } while (offset < text.length() && Character.isWhitespace(text.charAt(offset)));
+        numbers.add(Double.parseDouble(number));
+      } while (offset < text.length() && CellWhitespace.contains(text.charAt(offset)));
       if (dimension[0] == 0) dimension[0] = numbers.size();
       require(numbers.size() >= 2 && numbers.size() <= 3 && numbers.size() == dimension[0]);
       return numbers;

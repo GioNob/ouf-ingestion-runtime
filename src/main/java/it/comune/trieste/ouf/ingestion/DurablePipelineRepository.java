@@ -2,7 +2,6 @@ package it.comune.trieste.ouf.ingestion;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import java.time.Duration;
@@ -17,8 +16,8 @@ public class DurablePipelineRepository {
   private final ObjectReader handoffReader;
   public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){
     this.sql=sql;this.json=json;
-    // GeoJSON coordinates stay JSON numbers and can exceed binary floating point precision.
-    handoffReader=json.readerFor(new TypeReference<Map<String,Object>>() {}).with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    // Both runtimes must encode the same handoff after PostgreSQL has normalized its JSONB.
+    handoffReader=json.readerFor(new TypeReference<Map<String,Object>>() {});
   }
 
   /** Persists attempt, lineage, handoff and restart checkpoint in one short transaction. */

@@ -8,6 +8,38 @@ import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.Test;
 
 class PublicationGatewayClientTest {
+ @Test void onlyFrozenConfigurationAcceptsThreeMebibytes() throws Exception {
+  int twoMiB=2*1024*1024, threeMiB=3*1024*1024;
+  var size=new AtomicInteger(threeMiB);
+  var token=Files.createTempFile("frozen-response-test-",".token");
+  var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  try {
+   Files.writeString(token,"test-token");
+   server.createContext("/",exchange->{
+    try {
+     byte[] body=new byte[size.get()];
+     Arrays.fill(body,(byte)' ');
+     body[0]='{';
+     body[1]='}';
+     exchange.sendResponseHeaders(200,0);
+     exchange.getResponseBody().write(body);
+    } finally {exchange.close();}
+   });
+   server.start();
+   var client=new PublicationGatewayClient(PublishedActivationTest.JSON,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
+   var version=UUID.randomUUID();
+   assertThat(client.frozenConfiguration("test-source",version,"test-hash")).isEmpty();
+   size.set(threeMiB+1);
+   assertThatThrownBy(()->client.frozenConfiguration("test-source",version,"test-hash"))
+       .hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+   size.set(twoMiB);
+   assertThat(client.compatibility("test-source",version,"test-hash")).isEmpty();
+   size.set(twoMiB+1);
+   assertThatThrownBy(()->client.compatibility("test-source",version,"test-hash"))
+       .hasMessage("ING_PUBLICATION_RESPONSE_TOO_LARGE");
+  } finally {server.stop(0);Files.deleteIfExists(token);}
+ }
+
  @Test void resolvedNestedDatatypeMustMatchDigestAndPreparationStatus() throws Exception {
   String parent="urn:type:parent", child="urn:type:child", set=UUID.randomUUID().toString();
   var definitions=Map.of(parent,Map.of("components",List.of(Map.of("name","nested","type",child+"@"+set,"cardinality","MANY","required",true))),

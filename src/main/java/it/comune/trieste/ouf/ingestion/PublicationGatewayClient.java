@@ -18,6 +18,8 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name="ouf.ingestion.activation.enabled",havingValue="true")
 public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,RuntimePorts.SemanticPort,RuntimePorts.HistoricalBundlePort {
  static final int MAX_SEMANTIC_REFERENCES=32;
+ private static final int MAX_RESPONSE_BYTES=2*1024*1024;
+ private static final int MAX_FROZEN_CONFIGURATION_BYTES=3*1024*1024;
  private final ObjectMapper json;private final URI gateway;private final Path tokenFile;private final String tenant;private final HttpClient http;
  public PublicationGatewayClient(ObjectMapper json,@Value("${ouf.ingestion.activation.gateway-url}") String gateway,@Value("${ouf.ingestion.activation.token-file}") String token,@Value("${ouf.ingestion.activation.tenant-id}") String tenant){
   this.json=json;this.gateway=URI.create(gateway);this.tokenFile=Path.of(token);this.tenant=tenant;
@@ -70,16 +72,17 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
               && (field.containsKey("transformParams") || "VALUE_MAP_V1".equals(field.get("transform"))))))
     new ConfiguredValueMapping(PublishedExecutionMapper.map(bundle).configuration(),pins);
  }
- public Map<String,Object> frozenConfiguration(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/ingestion-configuration?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
+ public Map<String,Object> frozenConfiguration(String source,UUID version,String hash){return exchange("/api/internal/v1/onboarding/ingestion-configuration?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash),null,200,MAX_FROZEN_CONFIGURATION_BYTES);}
  public Map<String,Object> compatibility(String source,UUID version,String hash){return get("/api/internal/v1/onboarding/compatibility/ingestion-runtime?sourceId="+escape(source)+"&onboardingVersionId="+version+"&configurationHash="+escape(hash));}
  public Map<String,Object> attestCompatibility(String source,UUID version,String hash,long rows){return exchange("/api/internal/v1/onboarding/compatibility/ingestion-runtime",Map.of("sourceId",source,"onboardingVersionId",version.toString(),"configurationHash",hash,"compatible",true,"detail","Bounded frozen managed configuration probe PASS; validatedRows="+rows),201);}
  private Map<String,Object> get(String path){return exchange(path,null,200);}
- @SuppressWarnings("unchecked") private Map<String,Object> exchange(String path,Object body,int expected){
+ private Map<String,Object> exchange(String path,Object body,int expected){return exchange(path,body,expected,MAX_RESPONSE_BYTES);}
+ @SuppressWarnings("unchecked") private Map<String,Object> exchange(String path,Object body,int expected,int maxResponseBytes){
   try{String token=Files.readString(tokenFile).strip();if(token.isEmpty()||token.length()>16384||token.chars().anyMatch(Character::isWhitespace))throw new IllegalArgumentException("ING_WORKLOAD_TOKEN_INVALID");
    if(Thread.currentThread().isInterrupted())throw new InterruptedException();
    var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+token).header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString());
    if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)));
-   var pending=http.sendAsync(builder.build(),info->info.statusCode()==expected?new BoundedBody():HttpResponse.BodySubscribers.replacing(new byte[0]));HttpResponse<byte[]> response;
+   var pending=http.sendAsync(builder.build(),info->info.statusCode()==expected?new BoundedBody(maxResponseBytes):HttpResponse.BodySubscribers.replacing(new byte[0]));HttpResponse<byte[]> response;
    try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException timeout){pending.cancel(true);throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_TIMEOUT",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);}catch(ExecutionException failed){pending.cancel(true);
      if(failed.getCause() instanceof IOException io && "ING_PUBLICATION_RESPONSE_TOO_LARGE".equals(io.getMessage()))
        throw new IllegalArgumentException("ING_PUBLICATION_RESPONSE_TOO_LARGE");
@@ -89,10 +92,22 @@ public class PublicationGatewayClient implements RuntimePorts.ActiveBundlePort,R
   }catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_INTERRUPTED",AdapterSpi.ErrorClass.CONFIGURATION);}catch(IOException e){throw new RuntimePorts.GatewayFailure("ING_ACTIVATION_IO_FAILED",AdapterSpi.ErrorClass.CONFIGURATION);}
  }
  private static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
+  private final int maxBytes;
   private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();private Flow.Subscription subscription;
+  BoundedBody(int maxBytes){this.maxBytes=maxBytes;}
   public CompletionStage<byte[]> getBody(){return result;}
   public void onSubscribe(Flow.Subscription s){subscription=s;s.request(1);}
-  public void onNext(List<ByteBuffer> buffers){for(var b:buffers){if(bytes.size()+b.remaining()>2097152){subscription.cancel();result.completeExceptionally(new IOException("ING_PUBLICATION_RESPONSE_TOO_LARGE"));return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
+  public void onNext(List<ByteBuffer> buffers){
+   for(var buffer:buffers){
+    if(buffer.remaining()>maxBytes-bytes.size()){
+     result.completeExceptionally(new IOException("ING_PUBLICATION_RESPONSE_TOO_LARGE"));
+     subscription.cancel();
+     return;
+    }
+    byte[] chunk=new byte[buffer.remaining()];buffer.get(chunk);bytes.writeBytes(chunk);
+   }
+   subscription.request(1);
+  }
   public void onError(Throwable error){result.completeExceptionally(error);}
   public void onComplete(){result.complete(bytes.toByteArray());}
  }

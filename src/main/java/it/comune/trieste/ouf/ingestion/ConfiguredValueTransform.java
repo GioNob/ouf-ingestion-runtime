@@ -46,12 +46,13 @@ enum ConfiguredValueTransform {
     Object apply(Object value, long row) {
       if (rule == IDENTITY || value == null) return value;
       if (!(value instanceof String s)) throw new InvalidValue(row);
-      String text = s.strip();
+      if (rule == TEXT_NFC_TRIM_V1) s = Normalizer.normalize(s, Normalizer.Form.NFC);
+      String text = CellWhitespace.trim(s);
       if (text.isEmpty()) return null;
       try {
         return switch (rule) {
           case IDENTITY -> value;
-          case TEXT_NFC_TRIM_V1 -> Normalizer.normalize(text, Normalizer.Form.NFC);
+          case TEXT_NFC_TRIM_V1 -> text;
           case INTEGER_V1 -> new BigInteger(match(text, INTEGER, row)).toString();
           case INTEGER_GROUP_DOT_V1 -> new BigInteger(match(text, GROUP_DOT, row).replace(".", "")).toString();
           case DECIMAL_DOT_V1, DECIMAL_COMMA_V1 -> rule.legacyDecimal(text, row);
