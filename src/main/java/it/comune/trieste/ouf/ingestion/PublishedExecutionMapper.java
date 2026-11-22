@@ -18,17 +18,27 @@ public final class PublishedExecutionMapper {
     var config=new LinkedHashMap<String,Object>(execution);
     config.putAll(snapshot.configuration());
     config.put("typeCode",typeCode);
-    config.put("propertyMappings",semantic.get("propertyMappings"));
+    config.put("propertyMappings",semantic.getOrDefault("propertyMappings",List.of()));
+    Object compositions=semantic.getOrDefault("compositions",List.of());
+    if(!(compositions instanceof List<?> builders))throw invalid();
+    if(semantic.containsKey("compositions"))config.put("compositions",builders);
+    else config.remove("compositions");
     if(!(published.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw new IllegalArgumentException("ING_DATA_ACCESS_POLICY_REQUIRED");
     var labels=new LinkedHashSet<Map<String,Object>>();
     for(Object item:policies){if(!(item instanceof Map<?,?> policy)||!(policy.get("label") instanceof String label)||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(label))throw new IllegalArgumentException("ING_DATA_ACCESS_POLICY_INVALID");labels.add(Map.of("labelId",label));}
+    for(Object raw : builders) {
+      var comp = ValuePins.object(raw);
+      String target = ValuePins.string(comp,"targetPropertyIri"), label = ValuePins.string(comp,"dataAccessLabel");
+      if(policies.stream().map(ValuePins::object).noneMatch(policy -> "PROPERTY".equals(policy.get("scope"))
+          && target.equals(policy.get("target")) && label.equals(policy.get("label")))) throw invalid();
+    }
     config.put("dataAccessLabels",List.copyOf(labels));
     config.put("changeRepresentationProfile",published.get("changeRepresentationProfile"));
     var projection=PublishedActivation.map(extraction,"projection");
     config.put("expectedFieldNames",projection.get(typeCode));
     config.put("identityFields",PublishedActivation.map(published,"sourceObjectIdentityPolicy").get("sourceFields"));
     for(String key:List.of("adapterId","adapterRuntimeVersion","sourceSchemaRef","sourceSchemaId","sourceSchemaVersion","semanticPublicationSetRef","adapterProfileRef","observationPolicy"))PublishedActivation.text(config,key);
-    if(!(config.get("propertyMappings") instanceof List<?> mappings)||mappings.isEmpty())throw new IllegalArgumentException("ING_PROPERTY_MAPPING_REQUIRED");
+    if(!(config.get("propertyMappings") instanceof List<?> mappings)||(mappings.isEmpty() && builders.isEmpty()))throw new IllegalArgumentException("ING_PROPERTY_MAPPING_REQUIRED");
     if(!(config.get("expectedFieldNames") instanceof List<?> fields)||fields.isEmpty())throw new IllegalArgumentException("ING_EXPECTED_FIELDS_REQUIRED");
     if(!(config.get("identityFields") instanceof List<?> keys)||keys.isEmpty())throw new IllegalArgumentException("ING_IDENTITY_POLICY_REQUIRED");
     String mode=PublishedActivation.text(execution,"acquisitionMode");

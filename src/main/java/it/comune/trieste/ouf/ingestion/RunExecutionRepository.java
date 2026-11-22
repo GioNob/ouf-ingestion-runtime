@@ -7,6 +7,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import static it.comune.trieste.ouf.ingestion.RecoveryPredicates.*;
+
 @Repository
 public class RunExecutionRepository {
   private final JdbcClient sql;private final ObjectMapper json;
@@ -15,15 +17,10 @@ public class RunExecutionRepository {
     Optional<Claim> claimed=sql.sql("""
       with candidate as (
         select p.run_id,p.partition_key,r.publication_id from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id)
-        where r.state='RUNNING' and p.state='RUNNING'
-          and not exists(select 1 from ouf_ingestion.handoff_outbox h where h.run_id=r.run_id
-            and h.delivery_session_id is not null and h.state<>'ACKED')
-          and (p.retry_at is null or (p.retry_at<=clock_timestamp() and not exists(
-            select 1 from ouf_ingestion.source_health h where h.source_id=r.source_id
-            and (h.retry_not_before>clock_timestamp() or h.circuit_open_until>clock_timestamp()))))
+        left join ouf_ingestion.source_health sh on sh.source_id=r.source_id
+        where %s and (p.retry_at is null or %s<=clock_timestamp())
           and (p.retry_started_at is null or p.retry_started_at+interval '24 hours'<=clock_timestamp()
-            or not exists(select 1 from ouf_ingestion.ing_schedule s where s.schedule_id=r.schedule_id
-              and s.publication_id=r.publication_id and s.publication_enabled and s.discovery_verified_at<=clock_timestamp()-interval '5 minutes'))
+            or not exists(select 1 from ouf_ingestion.ing_schedule s where %s and not (%s)))
           and (p.lease_until is null or p.lease_until<clock_timestamp())
           and (not exists(select 1 from ouf_ingestion.run_recovery_session s where s.run_id=p.run_id)
             or not exists(select 1 from ouf_ingestion.ing_partition busy where busy.run_id=p.run_id and busy.lease_until>clock_timestamp()))
@@ -36,20 +33,36 @@ public class RunExecutionRepository {
       from candidate c where p.run_id=c.run_id and p.partition_key=c.partition_key
       returning p.run_id,p.partition_key,p.checkpoint_json::text,p.lease_generation,
                 c.publication_id is not null and (p.retry_started_at is not null or p.retry_at is not null)
-      """)
+      """.formatted(ACQUISITION_LANE,ACQUISITION_RETRY_AT,CURRENT_PUBLICATION,FRESH_DISCOVERY))
     .param("pressure",pressure).param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new Claim(rs.getObject(1,UUID.class),rs.getString(2),decodeMap(rs.getString(3)),rs.getLong(4),worker,rs.getBoolean(5))).optional();
     if(claimed.isPresent()){
       var c=claimed.orElseThrow();
+      // A worker can die between the POST and defer(). Re-enter the finite partition
+      // budget before admitting a replay, including the time spent on the first write.
+      int recovered=sql.sql("""
+          update ouf_ingestion.ing_partition p set retry_started_at=coalesce((
+              select min(e.intent_at) from ouf_ingestion.lake_write_evidence e
+              where e.run_id=p.run_id and e.partition_key=p.partition_key and e.receipt_ref is null),clock_timestamp()),
+            retry_attempts=1,retry_code='ING_LAKE_RECEIPT_MISSING',retry_at=clock_timestamp()+(:delay*interval '1 second'),lease_owner=null,lease_until=null
+          where p.run_id=:r and p.partition_key=:p and retry_started_at is null and %s
+          """.formatted(PENDING_LAKE_WRITE)).param("delay",RetryPolicy.delay(1,0,null)).param("r",c.runId()).param("p",c.partitionKey()).update();
+      if(recovered!=0){
+        sql.sql("""
+            update ouf_ingestion.lake_write_evidence set cause_code='ING_LAKE_RECEIPT_MISSING',cause_at=clock_timestamp()
+            where run_id=:r and partition_key=:p and receipt_ref is null and cause_code is null
+            """).param("r",c.runId()).param("p",c.partitionKey()).update();
+        return Optional.empty();
+      }
       var stop=sql.sql("""
         select case when r.publication_id is not null and not exists(select 1 from ouf_ingestion.ing_schedule s
-               where s.schedule_id=r.schedule_id and s.publication_id=r.publication_id and s.publication_enabled
-               and s.discovery_verified_at>clock_timestamp()-interval '5 minutes')
+               where %s and %s)
              then 'ING_ACTIVE_PUBLICATION_CHANGED'
-             when retry_attempts>=128 or retry_started_at+interval '24 hours'<=clock_timestamp()
+             when %s
              then 'ING_RECOVERY_BUDGET_EXHAUSTED' else '' end
         from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id)
         where p.run_id=:r and p.partition_key=:p and retry_started_at is not null
-        """).param("r",c.runId()).param("p",c.partitionKey()).query(String.class).optional();
+        """.formatted(CURRENT_PUBLICATION,FRESH_DISCOVERY,PARTITION_EXHAUSTED))
+        .param("r",c.runId()).param("p",c.partitionKey()).query(String.class).optional();
       if(stop.isPresent() && !stop.get().isEmpty()){pause(c,stop.get());return Optional.empty();}
       if(!RunRecoveryBudget.admit(sql,c))return Optional.empty();
       if(stop.isPresent())sql.sql("update ouf_ingestion.ing_partition set retry_attempts=retry_attempts+1 where run_id=:r and partition_key=:p").param("r",c.runId()).param("p",c.partitionKey()).update();

@@ -44,12 +44,10 @@ final class RunRecoveryBudget {
   /** Count one owned worker batch BEFORE adapter I/O; never retain a lock across I/O. */
   static boolean admit(JdbcClient sql,RunExecutionRepository.Claim claim){
     transaction();
-    var sessions=sql.sql("select session_id,state,attempts,max_attempts,deadline_at>clock_timestamp() within_deadline from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1 for update").param("r",claim.runId()).query().listOfRows();
+    var sessions=sql.sql("select session_id, ("+RecoveryPredicates.SESSION_CAN_ATTEMPT+") allowed from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1 for update").param("r",claim.runId()).query().listOfRows();
     if(sessions.isEmpty())return true; // Initial-run policy adoption is a separate, explicitly open tranche.
     var row=sessions.getFirst();UUID id=(UUID)row.get("session_id");
-    boolean allowed="ACTIVE".equals(row.get("state"))&&Boolean.TRUE.equals(row.get("within_deadline"))
-      &&((Number)row.get("attempts")).intValue()<((Number)row.get("max_attempts")).intValue();
-    if(allowed){sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:i").param("i",id).update();return true;}
+    if(Boolean.TRUE.equals(row.get("allowed"))){sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:i").param("i",id).update();return true;}
     exhausted(sql,claim.runId());
     sql.sql("update ouf_ingestion.ing_partition set state='PAUSED',lease_owner=null,lease_until=null where run_id=:r and state='RUNNING'").param("r",claim.runId()).update();
     sql.sql("update ouf_ingestion.ing_run set state='PAUSED',failure_code='ING_RECOVERY_BUDGET_EXHAUSTED',updated_at=clock_timestamp() where run_id=:r and state='RUNNING'").param("r",claim.runId()).update();

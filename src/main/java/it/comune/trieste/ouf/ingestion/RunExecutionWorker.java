@@ -33,10 +33,11 @@ public final class RunExecutionWorker {
       boolean exhausted=false;
       long batchDeadline=System.nanoTime()+Duration.ofSeconds(45).toNanos();
       runs.requireCurrent(claim);
+      var pending=pipeline.pendingEffects(claim);
       try(var cursor=adapter.open(bundle,new AdapterSpi.Checkpoint(claim.checkpoint()))){
         for(int count=0;count<100 && System.nanoTime()<batchDeadline;count++){
           var next=cursor.next();
-          if(next.isEmpty()){exhausted=true;break;}
+          if(next.isEmpty()){pipeline.verifyPending(claim,pending,null,false);exhausted=true;break;}
           var record=next.orElseThrow();
           Map<String,Object> watermark=Map.of("ordinal",record.ordinal());
           var command=new CanonicalRecordPipeline.Command(claim.runId(),claim.partitionKey(),record.ordinal(),
@@ -44,7 +45,12 @@ public final class RunExecutionWorker {
             cursor.checkpoint().value(),watermark,claim);
           var observation=schemas.observe(claim.runId(),bundle,record,context.correlationId());
           String schemaCode="ING_SCHEMA_"+observation.outcome().name();
+          pipeline.verifyPending(claim,pending,record.ordinal(),observation.outcome().blocking());
           var result=observation.outcome().blocking()?pipeline.reject(command,schemaCode):pipeline.process(command);
+          if(!pending.isEmpty()){
+            pending=pipeline.pendingEffects(claim);
+            if(!pending.isEmpty() && pending.getFirst().sequence()<=record.ordinal())pipeline.verifyPending(claim,pending,null,false);
+          }
           if(!result.succeeded()){
             if(result.blockingFailure()){
               String code=observation.outcome().blocking()?schemaCode:"ING_RECORD_QUARANTINED";
@@ -56,7 +62,11 @@ public final class RunExecutionWorker {
           }
         }
       }
-      runs.requireCurrent(claim);health.recordSuccess(context.sourceId());
+      runs.requireCurrent(claim);
+      if(!pending.isEmpty()){
+        throw new RuntimePorts.GatewayFailure("ING_LAKE_CURSOR_RETRY",AdapterSpi.ErrorClass.TRANSIENT_SOURCE);
+      }
+      health.recordSuccess(context.sourceId());
       if(exhausted)runs.inputExhausted(claim);else runs.release(claim);
       runs.completeDrained();log(exhausted?"INGESTION_INPUT_EXHAUSTED":"INGESTION_BATCH_COMPLETED",claim,context,null);
     }catch(RuntimeException failure){

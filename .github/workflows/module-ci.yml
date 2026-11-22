@@ -25,7 +25,7 @@ jobs:
         with: {fetch-depth: 0, persist-credentials: false}
       - name: Verify predecessor return and restart the candidate after a synthetic migration
         env:
-          PREDECESSOR: ${{ inputs.predecessor || '6f0504240b2653e5aa93729ae70cedc52228515d' }}
+          PREDECESSOR: ${{ inputs.predecessor || '8be19a3687ddb4388fee655998914ed127643a65' }}
           PGHOST: 127.0.0.1
           PGPORT: ${{ job.services.postgres.ports[5432] }}
           PGDATABASE: ouf_ingestion
@@ -61,7 +61,9 @@ jobs:
           repository: GioNob/ouf-source-onboarding
           ref: main
           path: .pairwise/onboarding
-          sparse-checkout: src/main/java/it/comune/trieste/ouf/onboarding/application
+          sparse-checkout: |
+            contracts
+            src/main/java/it/comune/trieste/ouf/onboarding/application
           persist-credentials: false
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}

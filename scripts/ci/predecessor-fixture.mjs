@@ -7,20 +7,40 @@ import { createServer } from 'node:http';
 export const source = 'source-a';
 export const property = 'https://example.test/name';
 export const latitudeProperty = 'https://example.test/latitude';
+export const geometryProperty = 'https://example.test/geometry';
+export const conceptProperty = 'https://example.test/place-type';
+export const coordinates = ['13.77012345678901234567', '45.65012345678901234567'];
+export const concept = 'https://example.test/concept/station';
 const tenant = 'tenant-a';
 const scope = 'ingestion.operations.read';
 const semantic = { semanticId: 'core', semanticVersion: '1', revisionId: randomUUID(), publicationSetId: randomUUID() };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const issuer = 'https://auth.test/realms/ouf';
+const sorted = (_, v) => v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v;
+const targetVocabulary = 'https://example.test/vocabulary/place-type@' + randomUUID();
+const definition = { targetVocabulary, entries: [{ code: 'ST', concept }] };
+const map = {
+  semanticId: 'https://example.test/value-map/place-type', semanticVersion: '1',
+  revisionId: randomUUID(), publicationSetId: semantic.publicationSetId,
+  targetVocabulary, definition, definitionSha256: digest(JSON.stringify(definition, sorted)),
+};
+map.valueMapRef = map.semanticId + '@' + map.publicationSetId;
 
 function publication(sequence, value, latitude) {
   const columns = ['id', 'name'];
   const cells = [sequence, value];
   const mappings = [{ sourceField: 'name', targetPropertyIri: property, transform: 'IDENTITY' }];
+  const bindings = [semantic];
   if (latitude !== undefined) {
-    columns.push('latitude');
-    cells.push(latitude);
+    columns.push('latitude', 'geometry', 'placeTypeCode');
+    cells.push(latitude, `POINT (${coordinates.join(' ')})`, 'ST');
     mappings.push({ sourceField: 'latitude', targetPropertyIri: latitudeProperty, transform: 'DECIMAL_DOT_V1' });
+    mappings.push({ sourceField: 'geometry', targetPropertyIri: geometryProperty, transform: 'WKT_V1',
+      transformParams: { crs: 'EPSG:4326' } });
+    mappings.push({ sourceField: 'placeTypeCode', targetPropertyIri: conceptProperty, transform: 'VALUE_MAP_V1',
+      transformParams: { valueMapRef: map.valueMapRef } });
+    bindings.push(map);
   }
   const csv = Buffer.from(`${columns.join(';')}\n${cells.join(';')}\n`);
   const ref = `object://files/approved-${sequence}.csv`;
@@ -33,8 +53,8 @@ function publication(sequence, value, latitude) {
   const bundle = {
     bundleId: 'bundle-' + source, bundleVersion: String(sequence), status: 'ACTIVE',
     source: { sourceId: source, sourceKind: 'INTERNAL_MANAGED', acquisitionMode: 'MANAGED' },
-    createdFromOnboardingVersion: randomUUID(), syncProfile: {}, semanticRefs: ['core@1'],
-    semanticReferenceBindings: [semantic],
+    createdFromOnboardingVersion: randomUUID(), syncProfile: {},
+    semanticRefs: bindings.map(pin => pin.semanticId + '@' + pin.semanticVersion), semanticReferenceBindings: bindings,
     extractionProfile: { runtime: { execution, stagingRef: ref, contentHash: 'sha256:' + digest(csv), csvDelimiter: ';' },
       projection: { PLACE: columns } },
     semanticMapping: { sourceType: { sourceId: source, typeCode: 'PLACE' },
@@ -44,8 +64,6 @@ function publication(sequence, value, latitude) {
     dataAccessPolicies: mappings.map(m => ({ target: m.targetPropertyIri, label: 'OPEN', scope: 'PROPERTY' })),
   };
   // PublishedActivation hashes sorted map keys, preserving array order.
-  const sorted = (_, v) => v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v;
   bundle.checksum = 'sha256:' + digest(JSON.stringify(bundle, sorted));
   return { csv, ref, envelope: { publicationId: randomUUID(), publicationSequence: sequence, tenantId: tenant,
     sourceId: source, sourceStatus: 'ENABLED', onboardingVersionId: bundle.createdFromOnboardingVersion,
@@ -69,7 +87,7 @@ export async function startFixture(dir) {
   }
   let current;
   const fixture = {
-    deliveries: [], holdAck: false,
+    deliveries: [], deliveryBodies: [], rawObjects: new Map(), holdAck: false, dropLakeReceipt: false, droppedWrite: null, reconciledWrite: false,
     publish(sequence, value, latitude) {
       current = publication(sequence, value, latitude);
       return current.envelope.publicationId;
@@ -88,9 +106,13 @@ export async function startFixture(dir) {
         if (url.pathname === publications) return reply(200, { items: current ? [current.envelope] : [], nextAfter: '' });
         if (current && url.pathname === publications + '/' + source + '/active') return reply(200, current.envelope);
         if (url.pathname === '/api/semantic/v1/references:resolve') {
-          for (const field of ['semanticId', 'revisionId', 'publicationSetId']) assert.equal(url.searchParams.get(field), semantic[field]);
-          return reply(200, { semantic_id: 'core', semantic_version: '1', revision_id: semantic.revisionId,
-            publication_set_id: semantic.publicationSetId, status: 'ACTIVE' });
+          const pin = current?.envelope.bundle.semanticReferenceBindings.find(p => p.semanticId === url.searchParams.get('semanticId'));
+          assert.ok(pin);
+          for (const field of ['revisionId', 'publicationSetId']) assert.equal(url.searchParams.get(field), pin[field]);
+          return reply(200, { semantic_id: pin.semanticId, semantic_version: pin.semanticVersion, revision_id: pin.revisionId,
+            publication_set_id: pin.publicationSetId, status: 'ACTIVE', ...(pin === map && {
+              artifact_type: 'VALUE_MAP', definition: pin.definition, definitionSha256: pin.definitionSha256,
+            }) });
         }
         if (current && url.pathname === '/internal/object-storage/v1/content' && url.searchParams.get('ref') === current.ref)
           return reply(200, current.csv);
@@ -98,14 +120,28 @@ export async function startFixture(dir) {
       if (req.method === 'POST') {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
-        const body = JSON.parse(Buffer.concat(chunks));
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        const body = JSON.parse(bodyText);
         if (url.pathname === '/api/internal/v1/lake/objects') {
-          const hash = 'sha256:' + digest(Buffer.from(body.contentBase64, 'base64'));
+          const content = Buffer.from(body.contentBase64, 'base64');
+          const hash = 'sha256:' + digest(content);
           assert.equal(body.contentHash, hash);
-          return reply(201, { durable: true, contentHash: hash, objectRef: 'lake:' + body.idempotencyKey });
+          if (fixture.dropLakeReceipt && body.zone === 'NORMALIZED') {
+            fixture.dropLakeReceipt = false;
+            fixture.droppedWrite = body;
+            return res.destroy();
+          }
+          if (fixture.droppedWrite?.idempotencyKey === body.idempotencyKey) {
+            assert.deepEqual(body, fixture.droppedWrite);
+            fixture.reconciledWrite = true;
+          }
+          const objectRef = 'lake:' + body.idempotencyKey;
+          if (body.zone === 'RAW') fixture.rawObjects.set(objectRef, JSON.parse(content));
+          return reply(201, { durable: true, contentHash: hash, objectRef });
         }
         if (url.pathname === '/api/internal/v1/handoffs') {
           fixture.deliveries.push(body);
+          fixture.deliveryBodies.push(bodyText);
           if (fixture.holdAck) {
             res.setHeader('Retry-After', '30');
             return reply(503, {});

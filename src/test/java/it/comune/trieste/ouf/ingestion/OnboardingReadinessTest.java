@@ -25,7 +25,7 @@ class OnboardingReadinessTest {
     when(objects.read(anyString(),anyLong(),anyString())).thenReturn("\ufeffid;name\r\n1;Town Hall\r\n2;Library\r\n".getBytes(StandardCharsets.UTF_8));
     when(gateway.attestCompatibility("source",version,hash,2)).thenReturn(attestation());
     assertThat(service.verify("source",version,hash,()->{})).containsEntry("status","PASS").containsEntry("validatedRows",2L).containsEntry("attestationSubmitted",true).containsEntry("reconciled",false);
-    var order=inOrder(gateway,objects);order.verify(gateway).frozenConfiguration("source",version,hash);order.verify(gateway).compatibility("source",version,hash);order.verify(gateway).preflight(any(ExecutionBundle.class));order.verify(objects).read(anyString(),anyLong(),anyString());order.verify(gateway).attestCompatibility("source",version,hash,2);
+    var order=inOrder(gateway,objects);order.verify(gateway).frozenConfiguration("source",version,hash);order.verify(gateway).compatibility("source",version,hash);order.verify(gateway).prepare(any(ExecutionBundle.class));order.verify(objects).read(anyString(),anyLong(),anyString());order.verify(gateway).attestCompatibility("source",version,hash,2);
   }
   @Test void lostAcknowledgmentReconcilesWithoutReissuingMutationOrReadingAsset(){
     frozen();when(gateway.compatibility("source",version,hash)).thenReturn(Map.of("status","PRESENT","compatible",true,"attestation",attestation()));
@@ -40,7 +40,7 @@ class OnboardingReadinessTest {
   }
   @Test void cancellationDuringSemanticResolutionNeverAttests(){
     frozen();when(gateway.compatibility("source",version,hash)).thenReturn(Map.of("status","ABSENT"));
-    doAnswer(invocation->{Thread.currentThread().interrupt();return null;}).when(gateway).preflight(any(ExecutionBundle.class));
+    doAnswer(invocation->{Thread.currentThread().interrupt();return null;}).when(gateway).prepare(any(ExecutionBundle.class));
     assertThatThrownBy(()->service.verify("source",version,hash,()->{})).hasMessage("ING_COMPAT_CANCELLED");
     verifyNoInteractions(objects);verify(gateway,never()).attestCompatibility(anyString(),any(),anyString(),anyLong());
   }

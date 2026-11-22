@@ -104,6 +104,28 @@ import org.springframework.test.context.*;
     assertThat(json.readTree(lake.raw)).isEqualTo(json.valueToTree(cells));
     assertThat(payload(result.handoffId()).get("canonicalPayload")).isEqualTo(Map.of("https://example.test/name",""));
   }
+  @Test void composedValuesKeepOriginalCellsInReferencedRawEvidence() throws Exception {
+    UUID run=run();var lake=new RecordingLake();var pipeline=pipeline(lake);
+    var cells=Map.<String,Object>of("when","2026-11-22T10:15+01:00","ids"," +001 | | 0002 ");
+    var list=Map.of("kind","CONSTRUCTOR","targetPropertyIri","urn:ids","dataAccessLabel","OPEN","constructorId","LIST_SPLIT_V1",
+        "inputs",List.of(Map.of("fieldName","ids","reader","IDENTITY","role","value")),
+        "params",Map.of("separator","|","itemReader","INTEGER_V1"));
+    var c=command(run,cells,List.of(Map.of("sourceField","when","targetPropertyIri","urn:when","transform","DATETIME_ISO_OFFSET_V1")),
+        Map.of("expectedFieldNames",List.of("when","ids"),"compositions",List.of(list)),Map.of());
+    pipeline.validateForCompatibility(c);
+    var result=pipeline.process(c);
+    assertThat(result.succeeded()).isTrue();
+    var handoff=payload(result.handoffId());
+    assertThat(handoff.get("canonicalPayload")).isEqualTo(Map.of("urn:when","2026-11-22T09:15:00Z","urn:ids",List.of("1","2")));
+    assertThat(json.readTree(lake.raw)).isEqualTo(json.valueToTree(cells));
+    var evidence=json.readTree(sql.sql("select evidence_json::text from ouf_ingestion.ing_lineage where lineage_id=:id")
+        .param("id",result.lineageId()).query(String.class).single());
+    var normalized=json.readTree(lake.normalized);
+    assertThat(normalized.path("sourceDataRef").asText()).isEqualTo(handoff.get("rawObjectRef"));
+    assertThat(evidence.at("/data/rawObjectRef").asText()).isEqualTo(handoff.get("rawObjectRef"));
+    assertThat(evidence.at("/data/rawHash").asText()).isEqualTo(ExecutionGatewayClient.hash(lake.raw));
+    assertThat(evidence.at("/processing/transformationIds").toString()).contains("DATETIME_ISO_OFFSET_V1","LIST_SPLIT_V1","INTEGER_V1");
+  }
 
   @Test void invalidTypedCellQuarantinesOnlyRawEvidenceWithoutProgress() {
     UUID run=run();var lake=new RecordingLake();
@@ -130,9 +152,10 @@ import org.springframework.test.context.*;
   private static String string(Map<String,Object> row,String key){return String.valueOf(row.get(key));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
   private static final class RecordingLake implements RuntimePorts.DataLakePort {
-    final List<Zone> zones=new ArrayList<>();byte[] raw;
+    final List<Zone> zones=new ArrayList<>();byte[] raw,normalized;
     public Receipt persist(Zone zone,UUID run,String object,byte[] content,String hash,String key){
       zones.add(zone);if(zone==Zone.RAW)raw=content.clone();
+      if(zone==Zone.NORMALIZED)normalized=content.clone();
       return new Receipt("lake:"+zone.name().toLowerCase()+":"+key,true);
     }
   }

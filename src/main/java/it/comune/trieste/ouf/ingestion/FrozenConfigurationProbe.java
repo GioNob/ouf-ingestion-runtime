@@ -57,11 +57,12 @@ public final class FrozenConfigurationProbe {
         ||new HashSet<>(keys).size()!=keys.size()||("NATIVE_KEY".equals(strategy)?keys.size()!=1:keys.size()<2))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
     Object rawExpected=bundle.configuration().get("expectedFieldNames");
     if(!(rawExpected instanceof List<?> expected)||expected.stream().anyMatch(x->!(x instanceof String s)||s.isBlank())||new HashSet<>(expected).size()!=expected.size())throw invalid("ING_EXPECTED_FIELDS_INVALID");
-    // Exact historical identities are resolved through the same Gateway port used by run preflight.
+    // Preparation requires active revisions and uses the same exact resolver as run preflight.
     requireRunning();
-    semantics.preflight(snapshot);
+    semantics.prepare(snapshot);
     requireRunning();
     var pipeline=new CanonicalRecordPipeline(json,new FrozenContractValidator(json),null,null,null);
+    pipeline.validateConfiguration(bundle);
     UUID run=UUID.randomUUID();long count=0;
     try(var cursor=adapter.open(bundle,new AdapterSpi.Checkpoint(Map.of()))){
       Optional<AdapterSpi.SourceRecord> next;

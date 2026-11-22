@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { latitudeProperty, property, source, startFixture } from './predecessor-fixture.mjs';
+import { concept, conceptProperty, coordinates, geometryProperty, latitudeProperty, property, source, startFixture } from './predecessor-fixture.mjs';
 
 const exec = promisify(execFile);
 const [scratch, name] = process.argv.slice(2);
@@ -11,8 +11,8 @@ const base = 'http://127.0.0.1:18133';
 const fixtureDir = scratch + '/fixture';
 const read = async file => (await readFile(scratch + '/' + file, 'utf8')).trim();
 const docker = async (...args) => (await exec('docker', args, { timeout: 50000 })).stdout.trim();
-const sql = async query => (await exec('psql', ['-XqAt', '-v', 'ON_ERROR_STOP=1', '-c', query], {
-  timeout: 8000, env: { ...process.env, PGOPTIONS: '-c default_transaction_read_only=on -c search_path=ouf_ingestion,public' },
+const sql = async (query, readOnly = true) => (await exec('psql', ['-XqAt', '-v', 'ON_ERROR_STOP=1', '-c', query], {
+  timeout: 8000, env: { ...process.env, PGOPTIONS: `-c default_transaction_read_only=${readOnly ? 'on' : 'off'} -c search_path=ouf_ingestion,public` },
 })).stdout.trim();
 
 assert.equal(await sql("select current_setting('server_version_num')::int / 10000"), '17');
@@ -33,7 +33,7 @@ async function waitFor(label, condition) {
   throw new Error('Timed out: ' + label);
 }
 
-async function start(role, restart = false) {
+async function start(role, restart = false, futureMigrations = 0) {
   running = name + '-' + role;
   const image = await read((role === 'next' ? 'new' : role) + '.id');
   if (restart) {
@@ -62,8 +62,8 @@ async function start(role, restart = false) {
     if (health.status !== 'UP') return false;
     if (role === 'new') {
       const details = health.components.ingestionReadiness.details;
-      assert.equal(details.schemaCompatibility, restart ? 'FUTURE_MIGRATIONS_PRESENT' : 'EXACT');
-      assert.equal(details.futureMigrations, restart ? 1 : 0);
+      assert.equal(details.schemaCompatibility, futureMigrations ? 'FUTURE_MIGRATIONS_PRESENT' : 'EXACT');
+      assert.equal(details.futureMigrations, futureMigrations);
     }
     return true;
   });
@@ -111,10 +111,30 @@ function verifyAck(row, attempts, value) {
   assert.equal(row.committed_handoff_id, row.handoff_id);
 }
 
-async function verifyRead(operation, runs) {
+async function verifyRead(operation, runs, candidate = false) {
   const items = await fixture.read(base, operation);
   assert.deepEqual(items.map(r => [r.source_ref, r.publication_id, r.job_ref, r.run_state]),
     runs.map(([publication, row]) => [source, publication, row.run_id, 'SUCCEEDED']), operation);
+  if (candidate) {
+    for (const row of items) {
+      assert.equal(row.runState, 'COMPLETED');
+      assert.equal(row.recoveryAction, 'TERMINAL');
+      assert.equal(row.udpHandoffConfirmed, true);
+      assert.equal(row.typeCode, 'PLACE');
+    }
+  }
+}
+
+function verifyCandidateValues(row, body) {
+  const { canonicalPayload: payload } = row.payload_json;
+  assert.equal(payload[latitudeProperty], '45.650123456789012345');
+  assert.equal(payload[conceptProperty], concept);
+  assert.deepEqual(payload[geometryProperty], {
+    crs: 'EPSG:4326', geoJson: { type: 'Point', coordinates: coordinates.map(Number) },
+  });
+  // Inspect the original numeric tokens before JSON.parse can round them to a JS Number.
+  const tokens = body.match(/"coordinates"\s*:\s*\[([^\]]+)\]/)?.[1].split(',').map(value => value.trim());
+  assert.deepEqual(tokens, coordinates.map(value => String(Number(value))));
 }
 
 try {
@@ -128,15 +148,26 @@ try {
   await start('new');
   const upgradedHistory = await history('new');
   assert.deepEqual(upgradedHistory.slice(0, oldHistory.length), oldHistory, 'predecessor history changed');
-  await verifyRead('status', [[first, baseline]]);
+  await verifyRead('status', [[first, baseline]], true);
+  await verifyRead('history', [[first, baseline]], true);
   fixture.holdAck = true;
+  fixture.dropLakeReceipt = true;
   const second = fixture.publish(2, 'Station', '45.6501234567890123450');
   const pending = await record(second, 'FAILED_RETRYABLE');
-  assert.equal(pending.payload_json.canonicalPayload[latitudeProperty], '45.650123456789012345');
+  verifyCandidateValues(pending, fixture.deliveryBodies[1]);
+  const raw = fixture.rawObjects.get(pending.payload_json.rawObjectRef);
+  assert.equal(raw?.placeTypeCode, 'ST');
+  assert.equal(raw?.geometry, `POINT (${coordinates.join(' ')})`);
   assert.equal(pending.last_error_code, 'ING_EXECUTION_GATEWAY_503');
   assert.equal(pending.attempts, 1);
+  assert.equal(fixture.reconciledWrite, true);
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');
   assert.ok(pending.idempotency_key);
+  const [recovering] = await fixture.read(base, 'status');
+  assert.equal(recovering.job_ref, pending.run_id);
+  assert.equal(recovering.recoveryAction, 'AUTOMATIC_RETRY');
+  assert.ok(Number.isFinite(Date.parse(recovering.retryAt)));
+  assert.equal(recovering.udpHandoffConfirmed, false);
   await docker('stop', '-t', '35', running);
   assert.deepEqual(fixture.deliveries, [baseline.payload_json, pending.payload_json]);
 
@@ -144,7 +175,11 @@ try {
   await start('old', true);
   assert.deepEqual(await history('new'), upgradedHistory, 'Flyway history changed on return');
   const retried = await record(second, 'ACKED');
+  assert.equal(await sql(`select count(*) from lake_write_evidence where run_id='${retried.run_id}'
+    and cause_code='ING_LAKE_TRANSPORT_UNCONFIRMED' and receipt_ref is not null`), '1');
   verifyAck(retried, 2, 'Station');
+  verifyCandidateValues(retried, fixture.deliveryBodies[2]);
+  assert.equal(fixture.deliveryBodies[2], fixture.deliveryBodies[1], 'HTTP handoff changed on predecessor redelivery');
   assert.deepEqual(retried.payload_json, pending.payload_json);
   assert.equal(retried.idempotency_key, pending.idempotency_key);
   await verifyRead('status', [[second, retried]]);
@@ -159,7 +194,40 @@ try {
                                 (select count(*) from handoff_outbox)`), '3|3|3');
   console.log('PASS: three managed runs, predecessor reads, same candidate handoff retried and acknowledged.');
 
+  fixture.holdAck = true;
+  const fourth = fixture.publish(4, 'Archive');
+  const held = await record(fourth, 'FAILED_RETRYABLE');
+  assert.match(held.run_id, /^[0-9a-f-]{36}$/);
+  // Advance only the CI fixture's existing timer. The predecessor must detect exhaustion and write the pause itself.
+  await sql(`update handoff_outbox set delivery_started_at=clock_timestamp()-interval '25 hours'
+    where run_id='${held.run_id}' and state='FAILED_RETRYABLE'`, false);
+  const expectedDeadlineMs = await waitFor('Predecessor pauses an exhausted handoff on V23', async () => {
+    return await sql(`select floor(extract(epoch from r.paused_at+interval '24 hours')*1000)::bigint
+      from ing_run r join handoff_outbox h using(run_id)
+      where r.run_id='${held.run_id}' and r.state='PAUSED' and r.failure_code='ING_HANDOFF_BLOCKED'
+        and r.paused_at is not null
+        and h.state='FAILED_TERMINAL' and h.delivery_stop_reason='ING_HANDOFF_BUDGET_EXHAUSTED' and h.attempts=1`);
+  });
+  const [predecessorPause] = await fixture.read(base, 'status');
+  assert.equal(predecessorPause.job_ref, held.run_id);
+  assert.equal(predecessorPause.run_state, 'PAUSED');
   await docker('stop', '-t', '35', running);
+  await start('new', true);
+  let firstDeadline;
+  for (const operation of ['status', 'history', 'status', 'history']) {
+    const items = await fixture.read(base, operation);
+    const row = items.find(item => item.job_ref === held.run_id);
+    assert.ok(row, operation);
+    assert.equal(row.runId, held.run_id);
+    assert.equal(row.recoveryAction, 'HUMAN_RESUME_OR_ABORT');
+    assert.equal(Date.parse(row.decisionDeadline), Number(expectedDeadlineMs));
+    assert.equal(Object.hasOwn(row, 'reviewUrl'), false);
+    firstDeadline ??= row.decisionDeadline;
+    assert.equal(row.decisionDeadline, firstDeadline);
+  }
+  await docker('stop', '-t', '35', running);
+  console.log('PASS: predecessor pause on V23 has a stable decision deadline in status and history.');
+
   const nextVersion = upgradedHistory.at(-1).version + '.1';
   assert.match(nextVersion, /^\d+(?:\.\d+)+$/);
   const probe = 'V' + nextVersion + '__ci_predecessor_return_probe.sql';
@@ -172,7 +240,7 @@ try {
   assert.equal(nextHistory.at(-1).version, nextVersion);
   assert.equal(await sql("select to_regclass('ouf_ingestion.ci_predecessor_return_probe') is not null"), 't');
   await docker('stop', '-t', '35', running);
-  await start('new', true);
+  await start('new', true, 1);
   assert.deepEqual(await history('new', [probe]), nextHistory, 'history changed after candidate restart');
   console.log('PASS: candidate ready after next-release migration (FUTURE_MIGRATIONS_PRESENT, 1).');
 } catch (error) {

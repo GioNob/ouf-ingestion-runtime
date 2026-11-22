@@ -19,7 +19,15 @@ public final class RuntimePorts {private RuntimePorts(){}
     enum Zone { RAW, NORMALIZED, CURATED }
     record Receipt(String objectRef,boolean durable){public Receipt{if(objectRef==null||objectRef.isBlank())throw new IllegalArgumentException("ING_DATALAKE_REF_REQUIRED");}}
   }
-  public interface SemanticPort {void preflight(Collection<String> pinnedReferences);default void preflight(ExecutionBundle bundle){Object raw=bundle.configuration().get("pinnedReferences");if(!(raw instanceof Collection<?> refs)||refs.isEmpty())throw new IllegalArgumentException("ING_PREFLIGHT_REFS_REQUIRED");preflight(refs.stream().map(String::valueOf).toList());}}
+  public interface SemanticPort {
+    void preflight(Collection<String> pinnedReferences);
+    default void prepare(ExecutionBundle bundle) { preflight(bundle); }
+    default void preflight(ExecutionBundle bundle) {
+      Object raw=bundle.configuration().get("pinnedReferences");
+      if(!(raw instanceof Collection<?> refs)||refs.isEmpty())throw new IllegalArgumentException("ING_PREFLIGHT_REFS_REQUIRED");
+      preflight(refs.stream().map(String::valueOf).toList());
+    }
+  }
   public interface DurableHandoffPort {Receipt deliver(UUID handoffId,Map<String,Object> payload,String idempotencyKey);record Receipt(String reference,boolean durable){}}
   public interface ReplayExecutionPort {Receipt execute(UUID replayId,UUID quarantineId,String targetBundleRef,String correlationId);default Receipt execute(ReplayPlan plan){return execute(plan.replayId(),plan.quarantineId(),plan.targetBundleRef(),plan.correlationId());}record ReplayPlan(UUID replayId,UUID quarantineId,String mode,UUID originalRunId,String originalBundleRef,String targetBundleRef,String rawObjectRef,UUID parentAttemptId,String correlationId){}record Receipt(UUID processingAttemptId,String downstreamReceiptRef,boolean durable){}}
 }

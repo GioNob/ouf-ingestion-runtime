@@ -1,7 +1,9 @@
 package it.comune.trieste.ouf.ingestion;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -11,7 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class DurablePipelineRepository {
   private final JdbcClient sql; private final ObjectMapper json;
-  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
+  private final ObjectReader handoffReader;
+  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){
+    this.sql=sql;this.json=json;
+    // Both runtimes must encode the same handoff after PostgreSQL has normalized its JSONB.
+    handoffReader=json.readerFor(new TypeReference<Map<String,Object>>() {});
+  }
 
   /** Persists attempt, lineage, handoff and restart checkpoint in one short transaction. */
   @Transactional
@@ -54,20 +61,17 @@ public class DurablePipelineRepository {
   public Optional<ClaimedHandoff> claim(String worker,Duration lease){
     var rows=sql.sql("""
       select h.handoff_id,h.run_id,h.delivery_session_id,
-             h.delivery_session_id is not null and r.publication_id is not null and not exists(
-               select 1 from ouf_ingestion.ing_schedule s where s.schedule_id=r.schedule_id
-                 and s.publication_id=r.publication_id and s.publication_enabled) as superseded,
-             b.remaining<=0 or not b.authorized or b.deadline<=clock_timestamp() as expired
+             %s as superseded,
+             %s as expired
       from ouf_ingestion.handoff_outbox h join ouf_ingestion.ing_run r using(run_id)
       join ouf_ingestion.handoff_budget b using(handoff_id)
-      where r.state in ('RUNNING','DRAINING')
+      where %s
         and ((h.state in ('READY','FAILED_RETRYABLE') and (h.next_attempt_at<=clock_timestamp() or b.deadline<=clock_timestamp()))
           or (h.state='DELIVERING' and h.lease_until<=clock_timestamp()))
-        and not exists(select 1 from ouf_ingestion.handoff_outbox prior
-          where prior.run_id=h.run_id and prior.partition_key=h.partition_key
-          and prior.sequence_no<h.sequence_no and prior.state<>'ACKED')
+        and %s
       order by h.next_attempt_at,h.created_at,h.handoff_id limit 1 for update of r,h skip locked
-      """).query().listOfRows();
+      """.formatted(RecoveryPredicates.DELIVERY_SUPERSEDED,RecoveryPredicates.DELIVERY_EXPIRED,
+        RecoveryPredicates.DELIVERY_LANE,RecoveryPredicates.DELIVERY_HEAD)).query().listOfRows();
     if(rows.isEmpty())return Optional.empty();
     var row=rows.getFirst(); UUID id=(UUID)row.get("handoff_id");
     UUID session=(UUID)row.get("delivery_session_id");
@@ -77,7 +81,7 @@ public class DurablePipelineRepository {
     }
     boolean expired=Boolean.TRUE.equals(row.get("expired"));
     if(!expired && session!=null){
-      expired=sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:s and state='ACTIVE' and attempts<max_attempts and deadline_at>clock_timestamp()")
+      expired=sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:s and "+RecoveryPredicates.SESSION_CAN_ATTEMPT)
         .param("s",session).update()!=1;
     }
     if(expired){
@@ -169,18 +173,48 @@ public class DurablePipelineRepository {
   }
 
   /** Short transaction before I/O. Only a confirmed matching receipt can skip a write. */
-  @Transactional public Optional<String> beginLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash){
+  @Transactional public LakeIntent beginLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash){
     lockPartition(c.claim());
     int inserted=sql.sql("""
       insert into ouf_ingestion.lake_write_evidence(run_id,partition_key,sequence_no,effect,content_hash)
       values(:r,:p,:seq,:effect,:hash) on conflict do nothing
       """).param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo())
       .param("effect",effect).param("hash",hash).update();
-    if(inserted==1)return Optional.empty();
-    var row=sql.sql("select content_hash,receipt_ref from ouf_ingestion.lake_write_evidence where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect")
+    if(inserted==1)return new LakeIntent(true,hash,null,false);
+    var row=sql.sql("select content_hash,receipt_ref,(abort_required or human_review) blocked from ouf_ingestion.lake_write_evidence where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect")
       .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).query().singleRow();
-    if(!hash.equals(row.get("content_hash")) || row.get("receipt_ref")==null)throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
-    return Optional.of((String)row.get("receipt_ref"));
+    return new LakeIntent(false,(String)row.get("content_hash"),(String)row.get("receipt_ref"),
+        Boolean.TRUE.equals(row.get("blocked")));
+  }
+  public record LakeIntent(boolean fresh,String hash,String receipt,boolean blocked){}
+
+  public record PendingEffect(long sequence,String effect,boolean blocked){}
+  public List<PendingEffect> pendingEffects(RunExecutionRepository.Claim c){
+    return sql.sql("""
+        select sequence_no,effect,%1$s from ouf_ingestion.lake_write_evidence
+        where run_id=:r and partition_key=:p and (receipt_ref is null or %1$s)
+        order by sequence_no,effect limit 4
+        """.formatted(RecoveryPredicates.BLOCKED_LAKE_EFFECT)).param("r",c.runId()).param("p",c.partitionKey())
+        .query((rs,n)->new PendingEffect(rs.getLong(1),rs.getString(2),rs.getBoolean(3))).list();
+  }
+
+  @Transactional public void recordLakeFailure(RunExecutionRepository.Claim claim,long sequence,String effect,String cause,boolean blocked,boolean humanReview){
+    lockPartition(claim);
+    int changed=sql.sql("""
+        update ouf_ingestion.lake_write_evidence set cause_code=:cause,cause_at=clock_timestamp(),abort_required=:blocked,human_review=:review
+        where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect
+        """).param("cause",cause).param("blocked",blocked).param("review",humanReview).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+    if(changed!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
+    sql.sql("""
+        insert into ouf_ingestion.operational_event(severity,event_type,correlation_id,run_id,source_id,
+            resource_type,resource_id,error_code,detail_json)
+        select 'WARN','LAKE_WRITE_FAILURE',correlation_id,run_id,source_id,'RUN',run_id::text,:cause,
+            jsonb_build_object('partitionKey',cast(:p as text),'sequenceNo',cast(:seq as bigint),'effect',cast(:effect as text))
+        from ouf_ingestion.ing_run where run_id=:r
+        """).param("cause",cause).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+
   }
 
   @Transactional public void finishLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash,String receipt){
@@ -190,7 +224,7 @@ public class DurablePipelineRepository {
     var query=sql.sql(statement+" where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect and content_hash=:hash and receipt_ref is null")
       .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).param("hash",hash);
     if(receipt!=null)query=query.param("receipt",receipt);
-    if(query.update()!=1)throw new IllegalStateException("ING_LAKE_RECONCILE_REQUIRED");
+    if(query.update()!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
   }
 
   private void lockPartition(RunExecutionRepository.Claim c){
@@ -215,7 +249,7 @@ public class DurablePipelineRepository {
   }
 
   private String encode(Object value){try{return json.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalArgumentException("ING_JSON_INVALID",e);}}
-  @SuppressWarnings("unchecked") private Map<String,Object> decode(String value){try{return json.readValue(value,Map.class);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
+  private Map<String,Object> decode(String value){try{return handoffReader.readValue(value);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
   public record ClaimedHandoff(UUID handoffId,Map<String,Object> payload,String idempotencyKey,int attempts){}
   public record StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark,RunExecutionRepository.Claim claim){
     public StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,sourceObjectId,attemptNo,adapterId,bundleVersion,bundleRef,idempotencyKey,payload,evidence,restartCheckpoint,candidateWatermark,null);}

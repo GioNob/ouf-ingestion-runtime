@@ -19,7 +19,7 @@ import org.springframework.test.context.*;
   @Test void readinessRequiresAuthenticatedPostgresAndSuccessfulFlyway() {
     var health = readiness.health();
     assertThat(health.getStatus()).isEqualTo(Status.UP);
-    assertThat(health.getDetails()).containsEntry("schemaVersion", "21").containsEntry("schemaCompatibility", "EXACT")
+    assertThat(health.getDetails()).containsEntry("schemaVersion", "23").containsEntry("schemaCompatibility", "EXACT")
         .containsEntry("futureMigrations", 0).containsEntry("transactionReadOnly", true);
     assertThat((Integer) health.getDetails().get("postgresVersion")).isBetween(170000, 179999);
     assertThat((Integer) health.getDetails().get("flywayRank")).isGreaterThanOrEqualTo(13);
