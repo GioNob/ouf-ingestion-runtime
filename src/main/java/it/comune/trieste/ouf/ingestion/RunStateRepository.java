@@ -7,6 +7,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import static it.comune.trieste.ouf.ingestion.RecoveryPredicates.*;
+
 @Repository
 public class RunStateRepository {
   private static final int CIRCUIT_THRESHOLD=5;
@@ -27,28 +29,18 @@ public class RunStateRepository {
       ), tenant_head as (
         select distinct on(tenant_id) schedule_id,tenant_id,next_run_at,last_dispatched_at,workload_class
         from ouf_ingestion.ing_schedule s
-        where state='ACTIVE' and (not trigger_once or discovered_bundle is not null)
+        where %s
           and (publication_id is null or discovery_verified_at>transaction_timestamp()-interval '5 minutes')
           and next_run_at<=clock_timestamp() and (lease_until is null or lease_until<transaction_timestamp())
           and (:pressure not in ('HARD_PRESSURE','RECOVERY') or workload_class<>'BOOTSTRAP')
           and ((select total from admitted)<(select case when :pressure='SOFT_PRESSURE' then greatest(1,global_running_limit/2)
                   when :pressure='RECOVERY' then 1 else global_running_limit end from policy)
               or exists(select 1 from ouf_ingestion.ing_run rp where rp.schedule_id=s.schedule_id and rp.state='PREFLIGHT'))
-          and not exists(
-            select 1 from ouf_ingestion.ing_run blocked
-            where blocked.source_id=s.source_id and blocked.tenant_id=s.tenant_id
-              and blocked.state not in ('ABORTED','SUCCEEDED','COMPLETED_WITH_WARNINGS')
-              and (blocked.failure_code in ('ING_RECOVERY_BUDGET_EXHAUSTED','ING_HANDOFF_BLOCKED','ING_LAKE_RECONCILE_REQUIRED')
-                or (blocked.state='PAUSED' and exists(select 1 from ouf_ingestion.run_recovery_session ledger
-                     where ledger.run_id=blocked.run_id and ledger.state='EXHAUSTED'))
-                or exists(select 1 from ouf_ingestion.runtime_issue issue where issue.run_id=blocked.run_id
-                    and issue.issue_code='ING_RECOVERY_BUDGET_EXHAUSTED' and issue.status='OPEN'
-                    and not (blocked.state='PREFLIGHT' and blocked.schedule_id=s.schedule_id))))
+          and not %s
           and not exists(select 1 from ouf_ingestion.source_health h where h.source_id=s.source_id
               and (h.retry_not_before>transaction_timestamp() or h.circuit_open_until>transaction_timestamp()
                    or h.recovery_probe_until>transaction_timestamp()))
-          and not exists(select 1 from ouf_ingestion.ing_run r where r.source_id=s.source_id
-              and (r.state in ('READY','RUNNING','DRAINING') or (r.state='PREFLIGHT' and r.schedule_id is distinct from s.schedule_id)))
+          and %s
         order by tenant_id,case workload_class when 'DELTA_ORDINARY' then 0 when 'DELTA_RECOVERY' then 1 else 2 end,next_run_at
       ), candidate as (
         select s.schedule_id from ouf_ingestion.ing_schedule s join tenant_head h using(schedule_id)
@@ -58,7 +50,7 @@ public class RunStateRepository {
       update ouf_ingestion.ing_schedule s set lease_owner=:w,lease_until=transaction_timestamp()+(:ms*interval '1 millisecond'),
         last_dispatched_at=transaction_timestamp(),lock_version=lock_version+1 from candidate c where s.schedule_id=c.schedule_id
       returning s.schedule_id,s.tenant_id,s.source_id,s.interval_seconds,s.publication_id,s.publication_checksum,s.next_run_at,s.lock_version
-      """)
+      """.formatted(SCHEDULE_ACTIVE,SCHEDULE_INCIDENT,SCHEDULE_NO_ACTIVE_RUN))
       .param("pressure",pressure).param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new ScheduleClaim(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getInt(4),worker,rs.getObject(5,UUID.class),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getLong(8))).optional();
     claimed.ifPresent(c->sql.sql("update ouf_ingestion.source_health set recovery_probe_owner=:w,recovery_probe_until=transaction_timestamp()+(:ms*interval '1 millisecond') where source_id=:s and status='PAUSED' and circuit_open_until<=transaction_timestamp() and (recovery_probe_until is null or recovery_probe_until<=transaction_timestamp())").param("w",worker).param("ms",lease.toMillis()).param("s",c.sourceId()).update());
     return claimed;
@@ -88,14 +80,11 @@ public class RunStateRepository {
   private boolean managedBudgetFits(ScheduleClaim c,UUID run,long delay,boolean anotherAttempt) {
     if(delay>2592000)return false; // Longest versioned HUMAN session.
     return sql.sql("""
-      select (not :another or activation_failures < coalesce(g.max_attempts,
-                 (s.sync_profile#>>'{operationalPolicy,maxRetryAttempts}')::int+1,:defaultAttempts))
-        and clock_timestamp()+(:delay * interval '1 second') <
-            coalesce(g.deadline_at, coalesce(s.activation_first_failure_at,clock_timestamp())
-              + coalesce((s.sync_profile#>>'{operationalPolicy,maxRetryElapsedSeconds}')::int,86400)*interval '1 second')
+      select (not :another or %s) and clock_timestamp()+(:delay * interval '1 second') < %s
       from ouf_ingestion.ing_schedule s left join ouf_ingestion.run_recovery_session g
         on g.run_id=:r and g.state='ACTIVE' where s.schedule_id=:s
-      """).param("defaultAttempts",RetryPolicy.ATTEMPTS).param("s",c.scheduleId()).param("r",run).param("another",anotherAttempt).param("delay",delay).query(Boolean.class).single();
+      """.formatted(MANAGED_ATTEMPTS_LEFT,MANAGED_DEADLINE))
+      .param("s",c.scheduleId()).param("r",run).param("another",anotherAttempt).param("delay",delay).query(Boolean.class).single();
   }
 
   private void stopManaged(ScheduleClaim c,UUID run,String code,boolean exhausted) {

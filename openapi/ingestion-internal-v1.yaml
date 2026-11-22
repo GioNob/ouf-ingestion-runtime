@@ -3,6 +3,24 @@ info: {title: OUF Ingestion Runtime Internal API, version: 1.0.0}
 servers: [{url: /api/internal/v1/ingestion}]
 security: [{workloadBearer: []}]
 paths:
+  /operations/status:
+    post:
+      operationId: readIngestionStatus
+      x-ouf-authorization-capability: ingestion.operations.read
+      security: [{gatewayReadReceipt: []}, {workloadBearer: []}]
+      responses:
+        '200':
+          description: Current operational state by authorized source
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestionOperationalRead'}}}
+  /operations/history:
+    post:
+      operationId: readIngestionHistory
+      x-ouf-authorization-capability: ingestion.operations.read
+      security: [{gatewayReadReceipt: []}, {workloadBearer: []}]
+      responses:
+        '200':
+          description: Operational state of authorized historical runs and pending publications
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestionOperationalRead'}}}
   /contracts/runs/{runId}:
     get:
       operationId: getPinnedContractsForRun
@@ -44,9 +62,38 @@ paths:
 components:
   securitySchemes:
     workloadBearer: {type: http, scheme: bearer, bearerFormat: JWT}
+    gatewayReadReceipt: {type: apiKey, in: header, name: X-OUF-Ingestion-Read-Receipt}
   parameters:
     RunId: {in: path, name: runId, required: true, schema: {type: string, format: uuid}}
   schemas:
+    IngestionOperationalRead:
+      type: object
+      required: [items, partial, authorization]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/IngestionOperationalRow'}}
+        partial: {type: boolean}
+        authorization: {type: string, enum: [AUTHORIZED, REDACTED]}
+    IngestionOperationalRow:
+      type: object
+      required: [run_state, runState, recoveryAction]
+      properties:
+        run_state: {type: string, description: Legacy state.}
+        runState:
+          type: string
+          description: COMPLETED requires a successful run, durable UDP acknowledgements for every handoff and a pinned typeCode.
+          enum: [AWAITING_START, BLOCKED, DISABLED, READY, PREFLIGHT, RUNNING, DRAINING, RETRY_WAIT, SUCCEEDED, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, PAUSED, ABORTED]
+        recoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
+        retryAt: {type: string, format: date-time, description: Persisted eligibility time for the next automatic action, subject to owner admission.}
+        scheduleRecoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
+        scheduleRetryAt: {type: string, format: date-time}
+        udpHandoffConfirmed: {type: boolean, description: The completed run has at least one handoff and each has a persisted durable acknowledgement.}
+        typeCode: {type: string, minLength: 1, description: Type pinned in the immutable configuration of a run with confirmed UDP handoff.}
+        runId: {type: string, format: uuid, description: Governed run target for a human decision.}
+        expectedVersion: {type: integer, minimum: 0}
+        reviewUrl: {type: string, format: uri, description: Version-bound HTTPS link to the authenticated task-50b run decision card, when its origin is configured.}
+    IngestionRecoveryAction:
+      type: string
+      enum: [NONE, AUTOMATIC_RETRY, AUTOMATIC_RECONCILIATION, HUMAN_RESUME_OR_ABORT, HUMAN_ABORT_REQUIRED, HUMAN_QUARANTINE_REVIEW, HUMAN_SCHEDULE_REVIEW, WAITING_FOR_PUBLICATION_VERIFICATION, NEW_PUBLICATION_REQUIRED, TERMINAL]
     ContractRequest:
       type: object
       required: [contractRef]

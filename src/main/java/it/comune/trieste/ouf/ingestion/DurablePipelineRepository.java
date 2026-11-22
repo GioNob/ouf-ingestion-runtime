@@ -61,20 +61,17 @@ public class DurablePipelineRepository {
   public Optional<ClaimedHandoff> claim(String worker,Duration lease){
     var rows=sql.sql("""
       select h.handoff_id,h.run_id,h.delivery_session_id,
-             h.delivery_session_id is not null and r.publication_id is not null and not exists(
-               select 1 from ouf_ingestion.ing_schedule s where s.schedule_id=r.schedule_id
-                 and s.publication_id=r.publication_id and s.publication_enabled) as superseded,
-             b.remaining<=0 or not b.authorized or b.deadline<=clock_timestamp() as expired
+             %s as superseded,
+             %s as expired
       from ouf_ingestion.handoff_outbox h join ouf_ingestion.ing_run r using(run_id)
       join ouf_ingestion.handoff_budget b using(handoff_id)
-      where r.state in ('RUNNING','DRAINING')
+      where %s
         and ((h.state in ('READY','FAILED_RETRYABLE') and (h.next_attempt_at<=clock_timestamp() or b.deadline<=clock_timestamp()))
           or (h.state='DELIVERING' and h.lease_until<=clock_timestamp()))
-        and not exists(select 1 from ouf_ingestion.handoff_outbox prior
-          where prior.run_id=h.run_id and prior.partition_key=h.partition_key
-          and prior.sequence_no<h.sequence_no and prior.state<>'ACKED')
+        and %s
       order by h.next_attempt_at,h.created_at,h.handoff_id limit 1 for update of r,h skip locked
-      """).query().listOfRows();
+      """.formatted(RecoveryPredicates.DELIVERY_SUPERSEDED,RecoveryPredicates.DELIVERY_EXPIRED,
+        RecoveryPredicates.DELIVERY_LANE,RecoveryPredicates.DELIVERY_HEAD)).query().listOfRows();
     if(rows.isEmpty())return Optional.empty();
     var row=rows.getFirst(); UUID id=(UUID)row.get("handoff_id");
     UUID session=(UUID)row.get("delivery_session_id");
@@ -84,7 +81,7 @@ public class DurablePipelineRepository {
     }
     boolean expired=Boolean.TRUE.equals(row.get("expired"));
     if(!expired && session!=null){
-      expired=sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:s and state='ACTIVE' and attempts<max_attempts and deadline_at>clock_timestamp()")
+      expired=sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:s and "+RecoveryPredicates.SESSION_CAN_ATTEMPT)
         .param("s",session).update()!=1;
     }
     if(expired){
@@ -194,10 +191,10 @@ public class DurablePipelineRepository {
   public record PendingEffect(long sequence,String effect,boolean blocked){}
   public List<PendingEffect> pendingEffects(RunExecutionRepository.Claim c){
     return sql.sql("""
-        select sequence_no,effect,(abort_required or human_review) from ouf_ingestion.lake_write_evidence
-        where run_id=:r and partition_key=:p and (receipt_ref is null or abort_required or human_review)
+        select sequence_no,effect,%1$s from ouf_ingestion.lake_write_evidence
+        where run_id=:r and partition_key=:p and (receipt_ref is null or %1$s)
         order by sequence_no,effect limit 4
-        """).param("r",c.runId()).param("p",c.partitionKey())
+        """.formatted(RecoveryPredicates.BLOCKED_LAKE_EFFECT)).param("r",c.runId()).param("p",c.partitionKey())
         .query((rs,n)->new PendingEffect(rs.getLong(1),rs.getString(2),rs.getBoolean(3))).list();
   }
 

@@ -111,10 +111,18 @@ function verifyAck(row, attempts, value) {
   assert.equal(row.committed_handoff_id, row.handoff_id);
 }
 
-async function verifyRead(operation, runs) {
+async function verifyRead(operation, runs, candidate = false) {
   const items = await fixture.read(base, operation);
   assert.deepEqual(items.map(r => [r.source_ref, r.publication_id, r.job_ref, r.run_state]),
     runs.map(([publication, row]) => [source, publication, row.run_id, 'SUCCEEDED']), operation);
+  if (candidate) {
+    for (const row of items) {
+      assert.equal(row.runState, 'COMPLETED');
+      assert.equal(row.recoveryAction, 'TERMINAL');
+      assert.equal(row.udpHandoffConfirmed, true);
+      assert.equal(row.typeCode, 'PLACE');
+    }
+  }
 }
 
 function verifyCandidateValues(row, body) {
@@ -140,7 +148,8 @@ try {
   await start('new');
   const upgradedHistory = await history('new');
   assert.deepEqual(upgradedHistory.slice(0, oldHistory.length), oldHistory, 'predecessor history changed');
-  await verifyRead('status', [[first, baseline]]);
+  await verifyRead('status', [[first, baseline]], true);
+  await verifyRead('history', [[first, baseline]], true);
   fixture.holdAck = true;
   fixture.dropLakeReceipt = true;
   const second = fixture.publish(2, 'Station', '45.6501234567890123450');
@@ -154,6 +163,11 @@ try {
   assert.equal(fixture.reconciledWrite, true);
   assert.equal(pending.committed_handoff_id, baseline.handoff_id, 'watermark advanced without ACK');
   assert.ok(pending.idempotency_key);
+  const [recovering] = await fixture.read(base, 'status');
+  assert.equal(recovering.job_ref, pending.run_id);
+  assert.equal(recovering.recoveryAction, 'AUTOMATIC_RETRY');
+  assert.ok(Number.isFinite(Date.parse(recovering.retryAt)));
+  assert.equal(recovering.udpHandoffConfirmed, false);
   await docker('stop', '-t', '35', running);
   assert.deepEqual(fixture.deliveries, [baseline.payload_json, pending.payload_json]);
 
