@@ -38,18 +38,14 @@ public final class FrozenConfigurationProbe {
     if(rawVersion==null||String.valueOf(rawVersion).isBlank())throw invalid("ING_COMPAT_BUNDLE_VERSION_REQUIRED");
     var snapshot=new ExecutionBundle(bundleId,String.valueOf(rawVersion),hash,source,"MANAGED",null,Map.of("publishedBundle",published,"pinnedReferences",refs));
     var bundle=PublishedExecutionMapper.map(snapshot);
-    AdapterSpi adapter=switch(bundle.acquisitionMode()){
-      case "INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX" -> new ManagedTabularAdapter(objects);
-      case "INTERNAL_MANAGED_GEOPACKAGE" -> new ManagedGeoPackageAdapter(objects);
-      default -> throw invalid("ING_COMPAT_ADAPTER_UNSUPPORTED");
-    };
+    AdapterSpi adapter=ExecutionRuntimeConfiguration.managedAdapter(bundle,objects,"ING_COMPAT_ADAPTER_UNSUPPORTED");
     if(!adapter.adapterId().equals(bundle.configuration().get("adapterId"))||!adapter.compatibility().current().equals(bundle.configuration().get("adapterRuntimeVersion")))throw invalid("ING_COMPAT_ADAPTER_VERSION_UNSUPPORTED");
     var identity=PublishedActivation.map(configuration,"sourceObjectIdentityPolicy");
     String strategy=PublishedActivation.text(identity,"strategy");
     Object fields=identity.get("sourceFields");
     if("MANAGED_DETERMINISTIC".equals(strategy)){
       var runtime=PublishedActivation.map(PublishedActivation.map(configuration,"extractionProfile"),"runtime");
-      if(!List.of("$managedRowOrdinal").equals(fields)||!"managed-tabular-v1".equals(adapter.adapterId())
+      if(!List.of("$managedRowOrdinal").equals(fields)||!Set.of("managed-tabular-v1",ManagedXlsxAdapter.ID).contains(adapter.adapterId())
           ||!"normalization://managed-file/asset-row-ordinal-v1".equals(identity.get("normalizationRuleRef"))
           ||!"ASSET_AND_ROW_ORDINAL".equals(runtime.get("rowIdentityBasis")))throw invalid("ING_COMPAT_IDENTITY_POLICY_UNSUPPORTED");
     }else if(!Set.of("NATIVE_KEY","COMPOSITE_NATIVE_KEY").contains(strategy)||!(fields instanceof List<?> keys)
@@ -72,6 +68,11 @@ public final class FrozenConfigurationProbe {
         if(!record.payload().keySet().containsAll(expected))throw invalid("ING_SCHEMA_INCOMPATIBLE");
         pipeline.validateForCompatibility(new CanonicalRecordPipeline.Command(run,"compatibility-probe",++count,1,adapter.adapterId(),bundle,record,"compatibility-probe",Map.of(),Map.of()));
       }
+    }catch(AdapterSpi.AdapterException failure){
+      // The CLI emits stable codes. Keep optional cell/range locations inside the adapter boundary.
+      if("ING_MANAGED_XLSX_MERGED_CELLS".equals(failure.code()))
+        throw new AdapterSpi.AdapterException(failure.code(),failure.errorClass(),failure.code());
+      throw failure;
     }
     requireRunning();
     if(count==0)throw invalid("ING_COMPAT_EMPTY_ASSET_UNPROVEN");

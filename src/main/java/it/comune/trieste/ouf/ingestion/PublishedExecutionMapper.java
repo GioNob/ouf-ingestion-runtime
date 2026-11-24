@@ -47,6 +47,20 @@ public final class PublishedExecutionMapper {
       if("INTERNAL_MANAGED_GEOPACKAGE".equals(mode)){
         if(!"managed-geopackage-v1".equals(config.get("adapterId"))||keys.equals(List.of("$managedRowOrdinal")))throw invalid();
         for(String key:List.of("layer","sourceCrs","geometryColumn")){String approved=PublishedActivation.text(runtime,key);if(!approved.equals(config.get(key)))throw invalid();}
+      }else if(ManagedXlsxAdapter.ID.equals(execution.get("adapterId")) || ManagedXlsxAdapter.ID.equals(config.get("adapterId"))){
+        if(!ManagedXlsxAdapter.MODE.equals(mode) || !ManagedXlsxAdapter.ID.equals(execution.get("adapterId"))
+            || !ManagedXlsxAdapter.ID.equals(config.get("adapterId"))
+            || !"adapter://managed-xlsx/1".equals(execution.get("adapterProfileRef"))
+            || !"1.0.0".equals(execution.get("adapterRuntimeVersion")))throw invalid();
+        Object approved=runtime.get("readParameters");
+        if(!Objects.equals(approved,execution.get("readParameters")) || runtime.containsKey("sheet")
+            || execution.containsKey("sheet"))throw invalid();
+        try{ManagedXlsxAdapter.Parameters.parse(approved);}
+        catch(AdapterSpi.AdapterException e){throw invalid();}
+        var xlsx=(Map<?,?>)((Map<?,?>)approved).get("xlsx");
+        config.put("readParameters",Map.of("xlsx",Map.copyOf(xlsx)));
+        config.put("adapterProfileRef",execution.get("adapterProfileRef"));
+        config.put("adapterRuntimeVersion",execution.get("adapterRuntimeVersion"));
       }else if(!Set.of("INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX").contains(mode)||!"managed-tabular-v1".equals(config.get("adapterId")))throw invalid();
       binding=PublishedActivation.text(runtime,"stagingRef");
       config.put("expectedHash",PublishedActivation.text(runtime,"contentHash"));
