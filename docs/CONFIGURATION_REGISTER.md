@@ -26,3 +26,20 @@ Proprietà intere positive con prefisso `ouf.ingestion.gateway.`. Registrare e r
 | `references-per-minute` | 60 | Ritmo massimo per processo delle richieste di risoluzione GET e POST. |
 | `other-retry-per-minute` | 60 | Ritmo di ripresa per le rotte Gateway senza dosatore dedicato. Senza header validi, l’intervallo di base è 60 secondi diviso per il ritmo. |
 | `server-wait-max-seconds` | 86400 | Tetto in secondi dell’attesa indicata dal Gateway, incluso il jitter, e della finestra usata dal dosatore. Il backoff senza progresso e i budget durevoli si applicano separatamente. |
+
+## Limiti di `managed-xlsx-v1`
+
+Worker e probe leggono gli stessi default da `managed-xlsx.properties`. La proprietà JVM con prefisso `ouf.ingestion.xlsx.` ha precedenza sulla variabile d’ambiente indicata. Registrare i valori effettivi nel profilo d’installazione e ripristinarli per entrambi i processi. I sei parametri sono pubblici e positivi.
+
+| Proprietà dopo il prefisso | Variabile d’ambiente | Default | Massimo di protocollo |
+|---|---|---:|---:|
+| `max-file-bytes` | `OUF_ING_XLSX_MAX_FILE_BYTES` | 10485760 | 10485760 |
+| `max-total-bytes` | `OUF_ING_XLSX_MAX_TOTAL_BYTES` | 104857600 | 268435456 |
+| `max-entry-bytes` | `OUF_ING_XLSX_MAX_ENTRY_BYTES` | 67108864 | 268435456 |
+| `min-inflate-ratio` | `OUF_ING_XLSX_MIN_INFLATE_RATIO` | 0.01 | — |
+| `max-entries` | `OUF_ING_XLSX_MAX_ENTRIES` | 10000 | 10000 |
+| `max-sheets` | `OUF_ING_XLSX_MAX_SHEETS` | 64 | 64 |
+
+Il rapporto è il numero di byte compressi diviso per i byte decompressi della singola voce. Il controllo del totale conta tutti i byte decompressi durante la verifica dell’archivio. Il conteggio dei fogli include i fogli di lavoro nascosti ed esclude i fogli grafico.
+
+Il bundle congela `maxRows`, `maxColumns`, `maxCellChars` e i parametri del foglio in `readParameters.xlsx`. Il solo fuso applicabile alle celle con data e ora è `readParameters.xlsx.timeZone`.
