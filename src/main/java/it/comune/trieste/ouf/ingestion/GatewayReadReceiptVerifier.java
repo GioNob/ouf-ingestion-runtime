@@ -14,10 +14,17 @@ import java.util.*;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-/** Authenticates only the two closed READ operations; never trusts ordinary identity headers. */
+/** Authenticates Gateway receipts for the listed owner reads. */
 public final class GatewayReadReceiptVerifier {
   public static final String HEADER="X-OUF-Ingestion-Read-Receipt", SCOPE="ingestion.operations.read";
   static final String PREFIX="/api/internal/v1/ingestion/operations/", DOMAIN="ouf-ingestion-read-owner-v1.";
+  static final String EXPLAIN_PATH = PREFIX + "incidents/explain";
+  static final String EXPLAIN_SCOPE = "operations.incident.explain";
+  private record Operation(String capability, String scope) {}
+  private static final Map<String, Operation> OPERATIONS = Map.of(
+      PREFIX + "status", new Operation("ouf.ingestion.status", SCOPE),
+      PREFIX + "history", new Operation("ouf.ingestion.history", SCOPE),
+      EXPLAIN_PATH, new Operation("ouf.operations.explain", EXPLAIN_SCOPE));
   private final ObjectMapper json;
   private final byte[] key;
   private final String issuer,audience,workload;
@@ -48,8 +55,12 @@ public final class GatewayReadReceiptVerifier {
     }catch(Exception e){throw new IllegalStateException("INGESTION_READ_OWNER_KEY_UNAVAILABLE");}
   }
   static boolean text(String s,int max){return s!=null&&!s.isBlank()&&s.length()<=max&&s.chars().noneMatch(c->Character.isISOControl(c));}
-  static String capability(String path) {
-    return switch(path){case PREFIX+"status"->"ouf.ingestion.status";case PREFIX+"history"->"ouf.ingestion.history";default->throw denied();};
+  static String[] paths() {
+    return OPERATIONS.keySet().toArray(String[]::new);
+  }
+  /** The authenticated receipt does not authorize this request. */
+  static final class BindingMismatch extends SecurityException {
+    BindingMismatch() { super("INGESTION_GATEWAY_READ_RECEIPT_INVALID"); }
   }
   static SecurityException denied(){return new SecurityException("INGESTION_GATEWAY_READ_RECEIPT_INVALID");}
   static byte[] decode(String value) {
@@ -60,15 +71,16 @@ public final class GatewayReadReceiptVerifier {
   public PrincipalContext verify(String proof,String method,String path,byte[] body,String correlation,String attempt,String idempotency) {
     try {
       if(proof==null||proof.length()>16384||body==null||body.length>65536||!"POST".equals(method))throw denied();
-      String capability=capability(path);String[] parts=proof.split("\\.",-1);if(parts.length!=2)throw denied();
+      Operation operation = OPERATIONS.get(path);
+      if (operation == null) throw denied();
+      String[] parts=proof.split("\\.",-1);if(parts.length!=2)throw denied();
       byte[] payload=decode(parts[0]),signature=decode(parts[1]);if(signature.length!=32||payload.length>12288)throw denied();
       var mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
       if(!MessageDigest.isEqual(mac.doFinal((DOMAIN+parts[0]).getBytes(StandardCharsets.US_ASCII)),signature))throw denied();
       Receipt r=json.readValue(payload,Receipt.class);long now=clock.instant().getEpochSecond();
-      if(r.v()!=1||!"ingestion-read-owner".equals(r.purpose())||!method.equals(r.method())||!path.equals(r.path())
-          ||!capability.equals(r.capability())||!"HUMAN".equals(r.actor())||r.iat()>now||r.exp()<=now||r.exp()<=r.iat()
+      if(r.v()!=1||!"ingestion-read-owner".equals(r.purpose())||!method.equals(r.method())
+          ||!"HUMAN".equals(r.actor())||r.iat()>now||r.exp()<=now||r.exp()<=r.iat()
           ||r.iat()<now-30||r.exp()>r.iat()+30||!issuer.equals(r.issuer())||!audience.equals(r.audience())||!workload.equals(r.workload())
-          ||!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)).equals(r.bodyHash())
           ||!text(r.subject(),4096)||!text(r.tenant(),200)||!text(r.acr(),4096)||!text(r.decisionRef(),4096)
           ||!text(r.correlationId(),256)||!text(r.attemptId(),256)||!text(r.idempotencyKey(),256)
           ||!r.correlationId().equals(correlation)||!r.attemptId().equals(attempt)||!r.idempotencyKey().equals(idempotency))throw denied();
@@ -79,9 +91,14 @@ public final class GatewayReadReceiptVerifier {
       if(!String.join(" ",roles).equals(r.roles()))throw denied();
       var scopes=new HashSet<String>();for(String scope:r.scope().split(" ",-1))
         if(!scope.matches("[A-Za-z0-9_:./-]{1,256}")||!scopes.add(scope)||scopes.size()>128)throw denied();
-      if(!scopes.contains(SCOPE))throw denied();
+      String bodyHash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+      if (!path.equals(r.path()) || !operation.capability().equals(r.capability())
+          || !scopes.contains(operation.scope()) || !bodyHash.equals(r.bodyHash())) {
+        throw new BindingMismatch();
+      }
       return new PrincipalContext(r.subject(),r.tenant(),PrincipalContext.ActorType.HUMAN,r.workload(),r.acr(),r.issuer(),r.audience(),
           scopes,new PrincipalContext.IdentityClaims(roles,r.acr(),Set.of(),null));
-    }catch(Exception e){throw denied();}
+    }catch(BindingMismatch mismatch){throw mismatch;}
+    catch(Exception e){throw denied();}
   }
 }
