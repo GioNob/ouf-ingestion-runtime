@@ -33,7 +33,7 @@ public class IngestionGatewayReadSecurityConfiguration {
     return new GatewayReadReceiptVerifier(file,issuer,audience,workload);
   }
   @Bean @Order(0) SecurityFilterChain ingestionGatewayReadChain(HttpSecurity http,GatewayReadReceiptVerifier verifier)throws Exception {
-    http.securityMatcher(GatewayReadReceiptVerifier.PREFIX+"status",GatewayReadReceiptVerifier.PREFIX+"history");
+    http.securityMatcher(GatewayReadReceiptVerifier.paths());
     http.csrf(c->c.disable());http.sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
     http.exceptionHandling(e->e.authenticationEntryPoint((request,response,error)->response.sendError(401)));
     http.authorizeHttpRequests(a->a.anyRequest().authenticated());
@@ -52,6 +52,11 @@ public class IngestionGatewayReadSecurityConfiguration {
     @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain)throws ServletException,IOException {
       if(!"POST".equals(request.getMethod())){response.sendError(405);return;}
       if(request.getQueryString()!=null){response.sendError(400);return;}
+      boolean explain = GatewayReadReceiptVerifier.EXPLAIN_PATH.equals(request.getRequestURI());
+      if (explain && request.getHeader(GatewayReadReceiptVerifier.HEADER) == null) {
+        response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "INGESTION_GATEWAY_READ_RECEIPT_INVALID");
+        return;
+      }
       String type=request.getContentType();if(type==null||!type.split(";",2)[0].trim().equalsIgnoreCase("application/json")){response.sendError(415);return;}
       byte[] body=request.getInputStream().readNBytes(65537);if(body.length>65536){response.sendError(413);return;}
       final TrustedPrincipal principal;
@@ -60,7 +65,11 @@ public class IngestionGatewayReadSecurityConfiguration {
         var context=verifier.verify(header(request,GatewayReadReceiptVerifier.HEADER),request.getMethod(),request.getRequestURI(),body,
             header(request,"X-Correlation-ID"),header(request,"X-Tool-Attempt-ID"),header(request,"Idempotency-Key"));
         principal=new TrustedPrincipal(context);
-      }catch(SecurityException invalid){response.sendError(401,"INGESTION_GATEWAY_READ_RECEIPT_INVALID");return;}
+      } catch (GatewayReadReceiptVerifier.BindingMismatch mismatch) {
+        int status = explain ? HttpServletResponse.SC_FORBIDDEN : HttpServletResponse.SC_UNAUTHORIZED;
+        response.sendError(status, mismatch.getMessage());
+        return;
+      } catch(SecurityException invalid){response.sendError(401,"INGESTION_GATEWAY_READ_RECEIPT_INVALID");return;}
       var old=SecurityContextHolder.getContext();var security=SecurityContextHolder.createEmptyContext();
       security.setAuthentication(new UsernamePasswordAuthenticationToken(principal,"",List.of()));SecurityContextHolder.setContext(security);
       try {chain.doFilter(new BodyRequest(request,body,principal),response);}
