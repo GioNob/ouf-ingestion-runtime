@@ -3,6 +3,24 @@ info: {title: OUF Ingestion Runtime Internal API, version: 1.0.0}
 servers: [{url: /api/internal/v1/ingestion}]
 security: [{workloadBearer: []}]
 paths:
+  /operations/status:
+    post:
+      operationId: readIngestionStatus
+      x-ouf-authorization-capability: ingestion.operations.read
+      security: [{gatewayReadReceipt: []}, {workloadBearer: []}]
+      responses:
+        '200':
+          description: Current operational state by authorized source
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestionOperationalRead'}}}
+  /operations/history:
+    post:
+      operationId: readIngestionHistory
+      x-ouf-authorization-capability: ingestion.operations.read
+      security: [{gatewayReadReceipt: []}, {workloadBearer: []}]
+      responses:
+        '200':
+          description: Operational state of authorized historical runs and pending publications
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestionOperationalRead'}}}
   /contracts/runs/{runId}:
     get:
       operationId: getPinnedContractsForRun
@@ -44,9 +62,74 @@ paths:
 components:
   securitySchemes:
     workloadBearer: {type: http, scheme: bearer, bearerFormat: JWT}
+    gatewayReadReceipt: {type: apiKey, in: header, name: X-OUF-Ingestion-Read-Receipt}
   parameters:
     RunId: {in: path, name: runId, required: true, schema: {type: string, format: uuid}}
   schemas:
+    IngestionOperationalRead:
+      type: object
+      required: [items, partial, authorization]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/IngestionOperationalRow'}}
+        partial: {type: boolean}
+        authorization: {type: string, enum: [AUTHORIZED, REDACTED]}
+    IngestionOperationalRow:
+      type: object
+      required: [run_state, runState, recoveryAction]
+      properties:
+        run_state: {type: string, description: Legacy state.}
+        runState:
+          type: string
+          description: COMPLETED requires a successful run, durable UDP acknowledgements for every handoff and a pinned typeCode.
+          enum: [AWAITING_START, BLOCKED, DISABLED, READY, PREFLIGHT, RUNNING, DRAINING, RETRY_WAIT, SUCCEEDED, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, PAUSED, ABORTED]
+        recoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
+        semanticReference:
+          type: object
+          description: Exact failing pin in the verified publication, using its zero-based bundle index.
+          required: [index, semanticId, revisionId]
+          properties:
+            code: {type: string, description: Cause for this pin. Older events may omit it.}
+            index: {type: integer, minimum: 0}
+            semanticId: {type: string}
+            revisionId: {type: string, format: uuid}
+        retryAt: {type: string, format: date-time, description: Persisted eligibility time for the next automatic action, subject to owner admission.}
+        decisionDeadline:
+          type: string
+          format: date-time
+          description: End of the minimum guaranteed window for the observed human decision, in ISO-8601 UTC. It is the earlier of the configured window from durable entry and any applicable owner deadlines. Its expiry does not transition the run.
+        scheduleRecoveryAction: {$ref: '#/components/schemas/IngestionRecoveryAction'}
+        scheduleRetryAt: {type: string, format: date-time}
+        scheduleDecisionDeadline:
+          type: string
+          format: date-time
+          description: End of the owner window for the observed schedule review, in ISO-8601 UTC. It is based on durable pause or blocking incident evidence. Its expiry does not transition the schedule.
+        udpHandoffConfirmed: {type: boolean, description: The completed run has at least one handoff and each has a persisted durable acknowledgement.}
+        typeCode: {type: string, minLength: 1, description: Source type code pinned in the immutable configuration of a run with confirmed UDP handoff.}
+        canonicalType:
+          type: string
+          minLength: 1
+          description: Canonical object class IRI pinned for this run. Available in any run state including PAUSED. Omitted when the run snapshot does not specify the class.
+        canonicalTypes:
+          type: array
+          items: {type: string}
+          description: semanticMapping.targetClasses[].classIri del bundle fissato nel run, in ordine; canonicalType è presente solo se la classe è una.
+        runId: {type: string, format: uuid, description: Governed run target for a human decision.}
+        expectedVersion: {type: integer, minimum: 0}
+      allOf:
+        - if:
+            properties:
+              recoveryAction: {enum: [HUMAN_RESUME_OR_ABORT, HUMAN_ABORT_REQUIRED, HUMAN_QUARANTINE_REVIEW, HUMAN_SCHEDULE_REVIEW]}
+          then: {required: [decisionDeadline]}
+          else: {not: {required: [decisionDeadline]}}
+        - if:
+            required: [scheduleRecoveryAction]
+            properties:
+              scheduleRecoveryAction: {const: HUMAN_SCHEDULE_REVIEW}
+          then: {required: [scheduleDecisionDeadline]}
+          else: {not: {required: [scheduleDecisionDeadline]}}
+    IngestionRecoveryAction:
+      type: string
+      enum: [NONE, AUTOMATIC_RETRY, AUTOMATIC_RECONCILIATION, HUMAN_RESUME_OR_ABORT, HUMAN_ABORT_REQUIRED, HUMAN_QUARANTINE_REVIEW, HUMAN_SCHEDULE_REVIEW, WAITING_FOR_PUBLICATION_VERIFICATION, NEW_PUBLICATION_REQUIRED, TERMINAL]
     ContractRequest:
       type: object
       required: [contractRef]

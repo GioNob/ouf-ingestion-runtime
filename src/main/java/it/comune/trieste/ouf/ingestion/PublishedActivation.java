@@ -17,13 +17,20 @@ public record PublishedActivation(UUID publicationId,long sequence,String source
       String acquisition=text(sourceConfig,"acquisitionMode");boolean once="MANAGED".equals(acquisition);if(!once&&!"PULL".equals(acquisition))throw invalid();
       Map<String,Object> sync=map(b,"syncProfile"),extraction=map(b,"extractionProfile");String runtimeMode=once?"MANAGED":"PULL";
       int interval=0;
-      if(once){if(sync.get("pollInterval")!=null)throw new IllegalArgumentException("ING_MANAGED_POLLING_FORBIDDEN");}
+      if(once){
+        if(sync.containsKey("operationalPolicy")){
+          Map<String,Object> policy=map(sync,"operationalPolicy");
+          if(policy.containsKey("maxRetryAttempts"))bounded(policy,"maxRetryAttempts",0,127);
+          if(policy.containsKey("maxRetryElapsedSeconds"))bounded(policy,"maxRetryElapsedSeconds",1,86400);
+        }
+        if(sync.containsKey("retryBackoffSeconds"))bounded(sync,"retryBackoffSeconds",1,86400);
+        if(sync.get("pollInterval")!=null)throw new IllegalArgumentException("ING_MANAGED_POLLING_FORBIDDEN");}
       else{
         Duration cadence=Duration.parse(text(sync,"pollInterval"));if(cadence.getNano()!=0||cadence.getSeconds()<60||cadence.getSeconds()>2678400)throw new IllegalArgumentException("ING_PUBLICATION_CADENCE_INVALID");interval=Math.toIntExact(cadence.getSeconds());
         Map<String,Object> policy=map(sync,"operationalPolicy");ZoneId.of(text(policy,"timeZone"));bounded(policy,"misfireToleranceSeconds",1,86400);bounded(policy,"sourceTimeoutSeconds",1,300);bounded(policy,"maxRetryAttempts",0,100);bounded(sync,"retryBackoffSeconds",1,86400);bounded(policy,"maxRetryElapsedSeconds",1,86400);bounded(policy,"incidentDedupWindowSeconds",1,86400);bounded(policy,"operationalRetentionDays",30,3650);
         if(!Set.of("PUBLIC_OPERATIONAL","TENANT_OPERATIONAL","RESTRICTED_OPERATIONAL","SECURITY_SENSITIVE").contains(text(policy,"operationalVisibilityClass")))throw invalid();
       }
-      List<String> refs=new ArrayList<>();Object raw=b.get("semanticRefs");if(!(raw instanceof List<?> list)||list.isEmpty()||list.size()>100)throw new IllegalArgumentException("ING_PREFLIGHT_REFS_REQUIRED");for(Object ref:list){if(!(ref instanceof String s)||!s.matches("[^@\\s]+@[^@\\s]+"))throw new IllegalArgumentException("ING_PREFLIGHT_EXACT_REF_REQUIRED");refs.add(s);}
+      List<String> refs=new ArrayList<>();Object raw=b.get("semanticRefs");if(!(raw instanceof List<?> list)||list.isEmpty())throw new IllegalArgumentException("ING_PREFLIGHT_REFS_REQUIRED");for(Object ref:list){if(!(ref instanceof String s)||!s.matches("[^@\\s]+@[^@\\s]+"))throw new IllegalArgumentException("ING_PREFLIGHT_EXACT_REF_REQUIRED");refs.add(s);}
       var config=new LinkedHashMap<String,Object>();config.put("publishedBundle",b);config.put("publicationId",text(envelope,"publicationId"));config.put("publicationSequence",number(envelope,"publicationSequence"));config.put("pinnedReferences",refs);config.put("syncProfile",sync);config.put("extractionProfile",extraction);
       String binding=once?null:text(b,"bindingRef");
       long sequence=number(envelope,"publicationSequence");if(sequence<1)throw invalid();

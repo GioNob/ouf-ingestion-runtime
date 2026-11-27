@@ -16,15 +16,14 @@ class FrozenConfigurationProbeTest {
     assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L).containsEntry("attestationSubmitted",false);
     assertThat(reads).isEqualTo(1);assertThat(semanticChecks).isEqualTo(1);
   }
-  @Test void nativeSemanticReferencesHaveTheSameBoundBeforeCompatibilityAttestation(){
-    for(int count:List.of(21,32,33)){
+  @Test void nativeSemanticReferencesBeyond32PassCompatibilityAttestation(){
+    for(int count:List.of(21,32,33,1024)){
       reads=0;semanticChecks=0;var c=candidate();var refs=new ArrayList<String>();
       for(int i=0;i<count;i++)refs.add("urn:native:"+i+"@1");
       PublishedActivation.map(configuration(c),"semanticMapping").put("semanticRefs",refs);rehash(c);
       RuntimePorts.SemanticPort exact=new RuntimePorts.SemanticPort(){public void preflight(Collection<String> actual){semanticChecks++;assertThat(actual).containsExactlyElementsOf(refs);}};
       var candidateProbe=new FrozenConfigurationProbe(json,objects(),exact);
-      if(count>32){assertThatThrownBy(()->candidateProbe.probe(c)).hasMessage("ING_PREFLIGHT_EXACT_REF_REQUIRED");assertThat(reads+semanticChecks).isZero();}
-      else{assertThat(candidateProbe.probe(c)).containsEntry("semanticBindingCount",count).containsEntry("validatedRows",2L);assertThat(reads).isOne();assertThat(semanticChecks).isOne();}
+      assertThat(candidateProbe.probe(c)).containsEntry("semanticBindingCount",count).containsEntry("validatedRows",2L);assertThat(reads).isOne();assertThat(semanticChecks).isOne();
     }
   }
   @Test void tamperedFrozenConfigurationFailsBeforeNetwork(){
@@ -55,6 +54,91 @@ class FrozenConfigurationProbeTest {
   @Test void unsupportedTransformUsesTheProductionFailure(){
     var c=candidate();PublishedActivation.map(configuration(c),"semanticMapping").put("propertyMappings",List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name","transform","UPPERCASE")));rehash(c);
     assertThatThrownBy(()->probe().probe(c)).hasMessage("ING_TRANSFORM_UNSUPPORTED");
+  }
+  @Test void decimalDotInFrozenCsvPassesOnEveryRow(){
+    var proof=decimalProbe(" +00045.6500 ","");
+    assertThat(proof).containsEntry("status","PASS").containsEntry("validatedRows",2L)
+        .containsEntry("attestationSubmitted",false);
+  }
+  @Test void compositionOnlyFrozenCsvUsesThePublishedDefinitionOnEveryRow(){
+    var c=candidate();
+    var configuration=configuration(c);
+    var semantic=PublishedActivation.map(configuration,"semanticMapping");
+    String set=UUID.randomUUID().toString();
+    String id="urn:type:place";
+    var component=Map.of("name","ids","type","integer","cardinality","MANY","required",true);
+    var definition=Map.of("components",List.of(component));
+    semantic.put("semanticRefs",List.of(id+"@1"));
+    semantic.put("propertyMappings",List.of());
+    semantic.put("compositions",List.of(Map.of("kind","STRUCTURED","typeRef",id+"@"+set,
+        "targetPropertyIri","https://example.test/name","dataAccessLabel","OPEN","components",List.of(
+        Map.of("component","ids","items",List.of(Map.of("fieldName","id","reader","INTEGER_V1")))))));
+    configuration.put("semanticReferenceBindings",List.of(Map.of("semanticId",id,"publicationSetId",set,"semanticVersion","1",
+        "revisionId",UUID.randomUUID().toString(),"definition",definition,"definitionSha256",ValuePins.digest(definition))));
+    rehash(c);
+    RuntimePorts.SemanticPort resolver=refs->assertThat(refs).containsExactly(id+"@1");
+    assertThat(new FrozenConfigurationProbe(json,objects(),resolver).probe(c)).containsEntry("validatedRows",2L);
+    byte[] invalid="id;name\r\n1;first\r\nprivate;second\r\n".getBytes(StandardCharsets.UTF_8);
+    execution(c).put("expectedSize",invalid.length);
+    runtime(c).put("contentHash",ExecutionGatewayClient.hash(invalid));rehash(c);
+    var error=catchThrowableOfType(()->new FrozenConfigurationProbe(json,(ref,size,hash)->invalid,resolver).probe(c),
+        ConfiguredValueTransform.InvalidValue.class);
+    assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
+    assertThat(error.rowOrdinal()).isEqualTo(2);
+  }
+  @Test void invalidDecimalInFrozenCsvIdentifiesTheDataRow(){
+    var error=catchThrowableOfType(()->decimalProbe("45.6500","private-cell"),ConfiguredValueTransform.InvalidValue.class);
+    assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
+    assertThat(error.rowOrdinal()).isEqualTo(2);
+  }
+  @Test void valueMapPinWithoutPublishedContentsFailsBeforeReadingAsset(){
+    var candidate=candidate();
+    configureValueMap(candidate,false);
+    var probe=new FrozenConfigurationProbe(json,objects(),refs->assertThat(refs).containsExactly("urn:map@1"));
+    assertThatThrownBy(()->probe.probe(candidate)).hasMessage("ING_VALUE_MAP_CONTENT_REQUIRED").hasNoCause();
+    assertThat(reads).isZero();
+  }
+  @Test void publishedValueMapInFrozenCsvRejectsLateUnmappedCodeWithOrdinal(){
+    var candidate=candidate();
+    configureValueMap(candidate,true);
+    RuntimePorts.SemanticPort resolver=refs->assertThat(refs).containsExactly("urn:map@1");
+    var probe=new FrozenConfigurationProbe(json,objects(),resolver);
+    assertThat(probe.probe(candidate)).containsEntry("validatedRows",2L);
+    byte[] invalid="id;name\r\n1;Town Hall\r\n2;private-unmapped\r\n".getBytes(StandardCharsets.UTF_8);
+    execution(candidate).put("expectedSize",invalid.length);
+    runtime(candidate).put("contentHash",ExecutionGatewayClient.hash(invalid));rehash(candidate);
+    var error=catchThrowableOfType(()->new FrozenConfigurationProbe(json,(ref,size,hash)->invalid,resolver).probe(candidate),
+        ConfiguredValueTransform.InvalidValue.class);
+    assertThat(error).hasMessage("ING_TRANSFORM_VALUE_INVALID").hasNoCause();
+    assertThat(error.rowOrdinal()).isEqualTo(2);
+  }
+  private void configureValueMap(Map<String,Object> candidate,boolean includeDefinition){
+    var configuration=configuration(candidate);
+    var semantic=PublishedActivation.map(configuration,"semanticMapping");
+    String set=UUID.randomUUID().toString();
+    String ref="urn:map@"+set;
+    semantic.put("semanticRefs",List.of("urn:map@1"));
+    semantic.put("propertyMappings",List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name",
+        "transform","VALUE_MAP_V1","transformParams",Map.of("valueMapRef",ref))));
+    var pin=new LinkedHashMap<String,Object>(Map.of("semanticId","urn:map","publicationSetId",set,
+        "semanticVersion","1","revisionId",UUID.randomUUID().toString(),"valueMapRef",ref));
+    if(includeDefinition){
+      String target="urn:vocab@"+UUID.randomUUID();
+      var definition=Map.of("targetVocabulary",target,"entries",List.of(Map.of("code","Library","concept","urn:concept:library"),
+          Map.of("code","Town Hall","concept","urn:concept:town-hall")));
+      pin.put("targetVocabulary",target);pin.put("definition",definition);pin.put("definitionSha256",ValuePins.digest(definition));
+    }else pin.put("vocabularyRef","urn:vocab");
+    configuration.put("semanticReferenceBindings",List.of(pin));
+    rehash(candidate);
+  }
+  private Map<String,Object> decimalProbe(String first,String second){
+    byte[] asset=("id;name\r\n1;"+first+"\r\n2;"+second+"\r\n").getBytes(StandardCharsets.UTF_8);
+    var c=candidate();
+    PublishedActivation.map(configuration(c),"semanticMapping").put("propertyMappings",
+        List.of(Map.of("sourceField","name","targetPropertyIri","https://example.test/name","transform","DECIMAL_DOT_V1")));
+    execution(c).put("expectedSize",asset.length);
+    runtime(c).put("contentHash",ExecutionGatewayClient.hash(asset));rehash(c);
+    return new FrozenConfigurationProbe(json,(ref,size,hash)->asset,semantics()).probe(c);
   }
   @Test void assetIntegrityFailurePropagatesWithoutPositiveProof(){
     RuntimePorts.ManagedObjectPort broken=(ref,size,hash)->{throw new IllegalArgumentException("ING_MANAGED_INTEGRITY_MISMATCH");};

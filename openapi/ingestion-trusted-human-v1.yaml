@@ -9,7 +9,7 @@ paths:
       x-ouf-mcp-tool-eligible: false
       x-ouf-authorization-capability: ingestion.run.read
       parameters: [{$ref: '#/components/parameters/Id'}]
-      responses: {'200': {description: Tenant-scoped run state and pinned bundle reference}, '404': {description: Not found in actor tenant}}
+      responses: {'200': {description: Tenant-scoped run state and pinned bundle reference, content: {application/json: {schema: {$ref: '#/components/schemas/RunLakeRecovery'}}}}, '404': {description: Not found in actor tenant}}
   /runs/{id}/pause:
     post:
       operationId: pauseIngestionRun
@@ -27,7 +27,7 @@ paths:
       x-ouf-authorization-capability: ingestion.run.resume
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunResumeRequest'}}}}
-      responses: {'200': {description: New finite recovery budget granted atomically; pinned baseline revalidated and blocking quarantines authorized RETRY_READY}, '409': {description: Run is not paused, optimistic conflict, or blocking quarantine requires governed retry}}
+      responses: {'200': {description: New finite recovery budget granted atomically; pinned baseline revalidated and blocking quarantines authorized RETRY_READY}, '409': {description: Check the expected version and the owner disposition. ING_LAKE_ABORT_REQUIRED requires governed abort}}
   /runs/{id}/abort:
     post:
       operationId: abortIngestionRun
@@ -196,6 +196,11 @@ components:
   parameters:
     Id: {in: path, name: id, required: true, schema: {type: string, format: uuid}}
   schemas:
+    RunLakeRecovery:
+      type: object
+      properties:
+        lake_cause_code: {type: [string, 'null'], description: Last classified lake write failure}
+        lake_next_action: {type: string, enum: [NONE, AUTO_RECONCILING, HUMAN_RESUME_REQUIRED, ABORT_REQUIRED]}
     IssueCloseRequest:
       type: object
       required: [reason, expectedVersion]

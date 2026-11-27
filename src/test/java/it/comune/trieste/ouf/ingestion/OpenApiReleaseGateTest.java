@@ -12,5 +12,19 @@ class OpenApiReleaseGateTest {
     for(String spec:List.of(trusted,internal)){assertThat(spec).startsWith("openapi: 3.1.0").contains("security:","securitySchemes:","operationId:","responses:");Matcher matcher=Pattern.compile("operationId: ([A-Za-z0-9]+)").matcher(spec);Set<String> ids=new HashSet<>();int count=0;while(matcher.find()){count++;assertThat(ids.add(matcher.group(1))).as("unique operationId "+matcher.group(1)).isTrue();}assertThat(count).isGreaterThan(0);}
     assertThat(trusted).contains("/runs/{id}:","/runs/{id}/pause:","/runs/{id}/resume:","/runs/{id}/abort:","/issues:","/issues/{id}:","/issues/{id}/explain:","/issues/schema-observations:","/quarantine:","/quarantine/{id}:","/logs/search:","/logs/aggregate:");
     assertThat(internal).contains("/contracts/runs/{runId}:","/runs/{runId}/lineage:","/contracts/deletion-check:","/contracts/assert-removable:","/contracts/legal-hold:");
+    assertThat(internal).contains("/operations/status:","/operations/history:",
+      "enum: ["+String.join(", ",Arrays.stream(RecoveryAction.values()).map(Enum::name).toList())+"]");
+  }
+
+  @Test void operationalDeadlinesAreConditionalOnHumanActions() throws Exception {
+    String internal=Files.readString(Path.of("openapi/ingestion-internal-v1.yaml"));
+    var humanActions=Arrays.stream(RecoveryAction.values()).filter(RecoveryAction::requiresHuman).map(Enum::name).toList();
+    assertThat(internal).contains("recoveryAction: {enum: ["+String.join(", ",humanActions)+"]}",
+      "scheduleRecoveryAction: {const: HUMAN_SCHEDULE_REVIEW}", "required: [scheduleRecoveryAction]")
+      .doesNotContain("reviewUrl:");
+    for(String field:List.of("decisionDeadline","scheduleDecisionDeadline")) {
+      assertThat(internal).containsPattern(field+":\\R\\s+type: string\\R\\s+format: date-time")
+        .contains("then: {required: ["+field+"]}","else: {not: {required: ["+field+"]}}");
+    }
   }
 }

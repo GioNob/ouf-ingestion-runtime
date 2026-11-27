@@ -17,5 +17,11 @@ public class RunLifecycleTrustedHumanApi {
   @PostMapping("/{id}/pause") Map<String,Object> pause(@PathVariable UUID id,@RequestBody ControlRequest body,@RequestHeader(value="X-Correlation-ID",required=false)String correlation,HttpServletRequest request){return service.pause(id,body.expectedVersion(),authorization.require(request,"ingestion.run.pause",true),correlation(correlation));}
   @PostMapping("/{id}/resume") Map<String,Object> resume(@PathVariable UUID id,@RequestBody ResumeRequest body,@RequestHeader(value="X-Correlation-ID",required=false)String correlation,HttpServletRequest request){return service.resume(id,body.expectedVersion(),authorization.require(request,"ingestion.run.resume",true),correlation(correlation),body.budget());}
   @PostMapping("/{id}/abort") Map<String,Object> abort(@PathVariable UUID id,@RequestBody ControlRequest body,@RequestHeader(value="X-Correlation-ID",required=false)String correlation,HttpServletRequest request){return service.abort(id,body.expectedVersion(),authorization.require(request,"ingestion.run.abort",true),correlation(correlation));}
+  @ExceptionHandler(RunLifecycleService.LakeAbortRequired.class)
+  org.springframework.http.ProblemDetail abortRequired(RunLifecycleService.LakeAbortRequired failure){
+    var problem=org.springframework.http.ProblemDetail.forStatusAndDetail(org.springframework.http.HttpStatus.CONFLICT,failure.getMessage());
+    problem.setProperty("lake_next_action","ABORT_REQUIRED");
+    return problem;
+  }
   private static String correlation(String value){return value==null||value.isBlank()?UUID.randomUUID().toString():value;}
 }

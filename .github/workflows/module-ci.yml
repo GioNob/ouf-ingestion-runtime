@@ -1,7 +1,37 @@
 name: Ingestion Runtime module CI
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      predecessor:
+        description: 'Supported predecessor commit SHA (defaults to the deployed revision)'
+        type: string
+        required: false
 permissions: {contents: read}
 jobs:
+  predecessor-return:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: ouf_ingestion, POSTGRES_USER: ouf_ingestion, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['5432/tcp']
+        options: >-
+          --health-cmd "pg_isready -U ouf_ingestion -d ouf_ingestion" --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Verify predecessor return and restart the candidate after a synthetic migration
+        env:
+          PREDECESSOR: ${{ inputs.predecessor || 'aafeb5683b5b00b7730e6491ff9956a9fb914231' }}
+          PGHOST: 127.0.0.1
+          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGDATABASE: ouf_ingestion
+          PGUSER: ouf_ingestion
+          PGPASSWORD: ci-only-password
+        run: bash scripts/ci/predecessor-return.sh "$PREDECESSOR"
   java21-postgresql17:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -17,6 +47,7 @@ jobs:
       OUF_ING_DB_USER: ouf_ingestion
       OUF_ING_DB_PASSWORD: ci-only-password
       AUTHORIZATION_PAIRWISE_ROOT: ${{ github.workspace }}/.pairwise/authorization
+      OUF_ONBOARDING_CHECKOUT: ${{ github.workspace }}/.pairwise/onboarding
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -24,6 +55,16 @@ jobs:
           repository: GioNob/ouf-source-onboarding
           ref: 0bf7a926e7a348a02f348e2444a020f135769a80
           path: .pairwise/authorization
+      - name: Read the current Onboarding value transform contract
+        uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: main
+          path: .pairwise/onboarding
+          sparse-checkout: |
+            contracts
+            src/main/java/it/comune/trieste/ouf/onboarding/application
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify and package
@@ -35,7 +76,50 @@ jobs:
           bash scripts/install-authorization-sdk.sh
           mvn -B -ntp -Dtest=OpenApiReleaseGateTest test
       - name: Build non-root container
-        run: docker build -t ouf-ingestion:${{ github.sha }} . && test "$(docker image inspect ouf-ingestion:${{ github.sha }} --format '{{.Config.User}}')" = "10002:10002"
+        run: docker build --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.source=https://github.com/GioNob/ouf-ingestion-runtime -t ouf-ingestion:${{ github.sha }} . && test "$(docker image inspect ouf-ingestion:${{ github.sha }} --format '{{.Config.User}}')" = "10002:10002"
+      - name: Preserve tested image for governed delivery
+        if: github.event_name == 'pull_request'
+        env:
+          OUF_REVIEWED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p target/governed-image
+          docker save "ouf-ingestion:${{ github.sha }}" | gzip -n > target/governed-image/image.tar.gz
+          python3 - <<'PYIMAGE'
+          import hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path('target/governed-image');archive=root/'image.tar.gz'
+          def command(*args):return subprocess.check_output(args,text=True).strip()
+          tested=command('git','rev-parse','HEAD');reviewed=os.environ['OUF_REVIEWED_SOURCE_COMMIT']
+          if not re.fullmatch('[a-f0-9]{40}',reviewed) or not re.fullmatch('[a-f0-9]{40}',tested):raise SystemExit(2)
+          checksum=hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda:stream.read(1048576),b''):checksum.update(block)
+          image='ouf-ingestion:'+os.environ['GITHUB_SHA']
+          migrations=sorted(Path('src/main/resources/db/migration').glob('V*.sql'))
+          value={'schema':'ouf.ingestion-tested-image.v1','repository':os.environ['GITHUB_REPOSITORY'],
+              'reviewedSourceCommit':reviewed,'testedCommit':tested,'testedTree':command('git','rev-parse','HEAD^{tree}'),
+              'workflowRunId':os.environ['GITHUB_RUN_ID'],'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
+              'imageTag':image,'imageId':command('docker','image','inspect',image,'--format','{{.Id}}'),
+              'archiveName':archive.name,'archiveSha256':checksum.hexdigest(),'archiveBytes':archive.stat().st_size,
+              'flywayMigrations':[{'name':m.name,'sha256':hashlib.sha256(m.read_bytes()).hexdigest()} for m in migrations],
+              'imageRevisionLabel':command('docker','image','inspect',image,'--format','{{index .Config.Labels "org.opencontainers.image.revision"}}'),
+              'qualifiedInCiOnly':True,
+              'targetApplyAuthorized':False,'humanBudgetGranted':False,'releaseAcceptance':False}
+          (root/'manifest.json').write_text(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n')
+          (root/'SHA256SUMS').write_text(value['archiveSha256']+'  image.tar.gz\n')
+          print('Tested image preserved; target authorization remains false.')
+          PYIMAGE
+      - name: Upload tested image without publishing a release
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-governed-image-${{ github.run_id }}
+          path: target/governed-image/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
       - name: Verify SQLite and XLSX inside the non-root runtime image
         run: |
           mkdir -p target/runtime-image-libs

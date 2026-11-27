@@ -1,24 +1,62 @@
 package it.comune.trieste.ouf.ingestion;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 /** Safe, bounded projection of persisted ingestion operational state for MCP/Gateway consumers. */
 @Service
 public class OperationalAwarenessService {
+  private static final String DEFAULT_HUMAN_DECISION_WINDOW = "PT24H";
   private final JdbcClient sql;
-  public OperationalAwarenessService(JdbcClient sql){this.sql=sql;}
+  private final OperationalRecovery recovery;
+  public OperationalAwarenessService(JdbcClient sql){this(sql,DEFAULT_HUMAN_DECISION_WINDOW);}
+  @Autowired
+  public OperationalAwarenessService(JdbcClient sql,
+      @Value("${ouf.ingestion.recovery.human-decision-window:" + DEFAULT_HUMAN_DECISION_WINDOW + "}") String humanDecisionWindow){
+    this.sql=sql;
+    this.recovery=new OperationalRecovery(Duration.parse(humanDecisionWindow));
+  }
 
   public List<Map<String,Object>> status(String source,int limit,TrustedAuthorizationContext.Context actor){
-    return sql.sql("select h.source_id as source_ref,h.status as health_state,h.consecutive_failures,h.last_error_code as error_code,h.retry_not_before as next_retry_at,h.circuit_open_until,r.run_id as job_ref,r.state as run_state,r.updated_at as last_seen_at,r.correlation_id from ouf_ingestion.source_health h join lateral (select run_id,state,updated_at,correlation_id from ouf_ingestion.ing_run r where r.source_id=h.source_id and r.tenant_id=:t order by r.updated_at desc limit 1) r on true where (cast(:s as text) is null or h.source_id=:s) order by r.updated_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows();
+    return sql.sql("""
+      with page as materialized (
+        select tenant_id,source_ref,publication_id,schedule_state,health_state,consecutive_failures,error_code,
+               next_retry_at,circuit_open_until,job_ref,control_version,run_state,last_seen_at,correlation_id,
+               true project_schedule
+        from ouf_ingestion.current_source_status
+        where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
+        order by last_seen_at desc nulls last,source_ref limit :n
+      )
+      """+OperationalRecovery.SELECT+" order by page.last_seen_at desc nulls last,page.source_ref")
+      .param("t",actor.tenantId()).param("s",source).param("n",bound(limit,100)).query().listOfRows()
+      .stream().map(recovery::project).toList();
   }
 
   public List<Map<String,Object>> history(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
-    return sql.sql("select run_id as job_ref,source_id as source_ref,state as run_state,failure_code as error_code,correlation_id,created_at as first_seen_at,updated_at as last_seen_at from ouf_ingestion.ing_run where tenant_id=:t and (cast(:s as text) is null or source_id=:s) and (cast(:since as timestamptz) is null or updated_at>=:since) order by updated_at desc limit :n")
-      .param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows();
+    return sql.sql("""
+      with page as materialized (
+        select history.*, is_current_publication project_schedule from (
+          select r.tenant_id,r.run_id job_ref,r.source_id source_ref,r.publication_id,r.state run_state,r.failure_code error_code,
+            r.correlation_id,r.created_at first_seen_at,r.updated_at last_seen_at,
+            r.publication_id is not null and r.publication_id is not distinct from s.publication_id is_current_publication
+          from ouf_ingestion.ing_run r left join ouf_ingestion.ing_schedule s
+            on s.tenant_id=r.tenant_id and s.source_id=r.source_id
+          where r.tenant_id=:t and (cast(:s as text) is null or r.source_id=:s)
+          union all
+          select tenant_id,job_ref,source_ref,publication_id,run_state,error_code,correlation_id,null,last_seen_at,true
+          from ouf_ingestion.current_source_status where tenant_id=:t and job_ref is null
+            and publication_id is not null and (cast(:s as text) is null or source_ref=:s)
+        ) history where (cast(:since as timestamptz) is null or last_seen_at>=:since)
+        order by is_current_publication desc,last_seen_at desc,source_ref,job_ref desc limit :n
+      )
+      """+OperationalRecovery.SELECT+" order by page.is_current_publication desc,page.last_seen_at desc,page.source_ref,page.job_ref desc")
+      .param("t",actor.tenantId()).param("s",source).param("since",since).param("n",bound(limit,200)).query().listOfRows()
+      .stream().map(recovery::project).toList();
   }
 
   public List<Map<String,Object>> incidents(String state,String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
@@ -30,7 +68,20 @@ public class OperationalAwarenessService {
   public Map<String,Object> summary(String source,OffsetDateTime since,int limit,TrustedAuthorizationContext.Context actor){
     var result=envelope("operations.status.read",incidents(null,source,since,limit,actor),actor);
     @SuppressWarnings("unchecked") var items=(List<Map<String,Object>>)result.get("items");long open=items.stream().filter(x->"OPEN".equals(x.get("lifecycle_state"))).count();
-    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");boolean partial=Boolean.TRUE.equals(out.get("partial"));out.put("status",partial?"UNKNOWN":open>0?"DEGRADED":"HEALTHY");out.put("openIncidents",open);return out;
+    var out=new LinkedHashMap<>(result);out.put("module","INGESTION");boolean partial=Boolean.TRUE.equals(out.get("partial"));boolean degraded=open>0;
+    if(!partial && !degraded){
+      var unhealthy=sql.sql("""
+        select source_ref,job_ref from ouf_ingestion.current_source_status
+        where tenant_id=:t and (cast(:s as text) is null or source_ref=:s)
+          and (health_state in ('DEGRADED','PAUSED') or run_state in ('RETRY_WAIT','BLOCKED','PAUSED'))
+        order by source_ref limit 1
+        """).param("t",actor.tenantId()).param("s",source).query().listOfRows();
+      if(!unhealthy.isEmpty()){
+        degraded=visible("operations.status.read",unhealthy.getFirst(),actor);
+        if(!degraded){partial=true;out.put("partial",true);out.put("authorization","REDACTED");}
+      }
+    }
+    out.put("status",partial?"UNKNOWN":degraded?"DEGRADED":"HEALTHY");out.put("openIncidents",open);return out;
   }
   public Map<String,Object> envelope(String capability,List<Map<String,Object>> rows,TrustedAuthorizationContext.Context actor){
     var visible=new ArrayList<Map<String,Object>>();boolean partial=false;

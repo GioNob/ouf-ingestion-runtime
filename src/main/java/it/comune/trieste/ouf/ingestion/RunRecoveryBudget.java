@@ -44,12 +44,10 @@ final class RunRecoveryBudget {
   /** Count one owned worker batch BEFORE adapter I/O; never retain a lock across I/O. */
   static boolean admit(JdbcClient sql,RunExecutionRepository.Claim claim){
     transaction();
-    var sessions=sql.sql("select session_id,state,attempts,max_attempts,deadline_at>clock_timestamp() within_deadline from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1 for update").param("r",claim.runId()).query().listOfRows();
+    var sessions=sql.sql("select session_id, ("+RecoveryPredicates.SESSION_CAN_ATTEMPT+") allowed from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1 for update").param("r",claim.runId()).query().listOfRows();
     if(sessions.isEmpty())return true; // Initial-run policy adoption is a separate, explicitly open tranche.
     var row=sessions.getFirst();UUID id=(UUID)row.get("session_id");
-    boolean allowed="ACTIVE".equals(row.get("state"))&&Boolean.TRUE.equals(row.get("within_deadline"))
-      &&((Number)row.get("attempts")).intValue()<((Number)row.get("max_attempts")).intValue();
-    if(allowed){sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:i").param("i",id).update();return true;}
+    if(Boolean.TRUE.equals(row.get("allowed"))){sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:i").param("i",id).update();return true;}
     exhausted(sql,claim.runId());
     sql.sql("update ouf_ingestion.ing_partition set state='PAUSED',lease_owner=null,lease_until=null where run_id=:r and state='RUNNING'").param("r",claim.runId()).update();
     sql.sql("update ouf_ingestion.ing_run set state='PAUSED',failure_code='ING_RECOVERY_BUDGET_EXHAUSTED',updated_at=clock_timestamp() where run_id=:r and state='RUNNING'").param("r",claim.runId()).update();
@@ -66,6 +64,9 @@ final class RunRecoveryBudget {
     boolean owned=sql.sql("select exists(select 1 from ouf_ingestion.ing_partition p join ouf_ingestion.ing_run r using(run_id) where p.run_id=:r and p.partition_key=:p and p.lease_owner=:w and p.lease_generation=:g and p.lease_until>clock_timestamp() and p.state='RUNNING' and r.state='RUNNING')")
       .param("r",claim.runId()).param("p",claim.partitionKey()).param("w",claim.worker()).param("g",claim.generation()).query(Boolean.class).single();
     if(!owned)throw new IllegalStateException("ING_PARTITION_LEASE_LOST");
+    if(sql.sql("select exists(select 1 from ouf_ingestion.ing_partition where run_id=:r and partition_key=:p and retry_started_at+interval '24 hours'<=clock_timestamp())")
+        .param("r",claim.runId()).param("p",claim.partitionKey()).query(Boolean.class).single())
+      throw new IllegalStateException("ING_RECOVERY_BUDGET_EXHAUSTED");
     var states=sql.sql("select state='ACTIVE' and deadline_at>clock_timestamp() valid from ouf_ingestion.run_recovery_session where run_id=:r order by epoch desc limit 1").param("r",claim.runId()).query(Boolean.class).list();
     if(!states.isEmpty()&&!states.getFirst())throw new IllegalStateException("ING_RECOVERY_BUDGET_EXHAUSTED");
   }

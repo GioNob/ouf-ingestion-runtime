@@ -1,7 +1,9 @@
 package it.comune.trieste.ouf.ingestion;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -11,7 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class DurablePipelineRepository {
   private final JdbcClient sql; private final ObjectMapper json;
-  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){this.sql=sql;this.json=json;}
+  private final ObjectReader handoffReader;
+  public DurablePipelineRepository(JdbcClient sql,ObjectMapper json){
+    this.sql=sql;this.json=json;
+    // Both runtimes must encode the same handoff after PostgreSQL has normalized its JSONB.
+    handoffReader=json.readerFor(new TypeReference<Map<String,Object>>() {});
+  }
 
   /** Persists attempt, lineage, handoff and restart checkpoint in one short transaction. */
   @Transactional
@@ -52,15 +59,65 @@ public class DurablePipelineRepository {
   /** Claim transaction ends before the remote call. SKIP LOCKED supports competing workers. */
   @Transactional
   public Optional<ClaimedHandoff> claim(String worker,Duration lease){
-    return sql.sql("with candidate as (select h.handoff_id from ouf_ingestion.handoff_outbox h where ((h.state in ('READY','FAILED_RETRYABLE') and h.next_attempt_at<=transaction_timestamp()) or (h.state='DELIVERING' and h.lease_until<transaction_timestamp())) and not exists(select 1 from ouf_ingestion.handoff_outbox prior where prior.run_id=h.run_id and prior.partition_key=h.partition_key and prior.sequence_no<h.sequence_no and prior.state<>'ACKED') order by h.next_attempt_at,h.created_at for update skip locked limit 1) update ouf_ingestion.handoff_outbox h set state='DELIVERING',lease_owner=:w,lease_until=transaction_timestamp()+(:ms * interval '1 millisecond'),attempts=attempts+1 from candidate c where h.handoff_id=c.handoff_id returning h.handoff_id,h.payload_json::text,h.idempotency_key")
-      .param("w",worker).param("ms",lease.toMillis()).query((rs,n)->new ClaimedHandoff(rs.getObject(1,UUID.class),decode(rs.getString(2)),rs.getString(3))).optional();
+    var rows=sql.sql("""
+      select h.handoff_id,h.run_id,h.delivery_session_id,
+             %s as superseded,
+             %s as expired
+      from ouf_ingestion.handoff_outbox h join ouf_ingestion.ing_run r using(run_id)
+      join ouf_ingestion.handoff_budget b using(handoff_id)
+      where %s
+        and ((h.state in ('READY','FAILED_RETRYABLE') and (h.next_attempt_at<=clock_timestamp() or b.deadline<=clock_timestamp()))
+          or (h.state='DELIVERING' and h.lease_until<=clock_timestamp()))
+        and %s
+      order by h.next_attempt_at,h.created_at,h.handoff_id limit 1 for update of r,h skip locked
+      """.formatted(RecoveryPredicates.DELIVERY_SUPERSEDED,RecoveryPredicates.DELIVERY_EXPIRED,
+        RecoveryPredicates.DELIVERY_LANE,RecoveryPredicates.DELIVERY_HEAD)).query().listOfRows();
+    if(rows.isEmpty())return Optional.empty();
+    var row=rows.getFirst(); UUID id=(UUID)row.get("handoff_id");
+    UUID session=(UUID)row.get("delivery_session_id");
+    if(Boolean.TRUE.equals(row.get("superseded"))){
+      sql.sql("update ouf_ingestion.handoff_outbox set state='FAILED_TERMINAL',delivery_stop_reason='ING_HANDOFF_DISPOSITION_REQUIRED',last_error_code='ING_ACTIVE_PUBLICATION_CHANGED',lease_owner=null,lease_until=null where handoff_id=:h").param("h",id).update();
+      block((UUID)row.get("run_id"));return Optional.empty();
+    }
+    boolean expired=Boolean.TRUE.equals(row.get("expired"));
+    if(!expired && session!=null){
+      expired=sql.sql("update ouf_ingestion.run_recovery_session set attempts=attempts+1 where session_id=:s and "+RecoveryPredicates.SESSION_CAN_ATTEMPT)
+        .param("s",session).update()!=1;
+    }
+    if(expired){
+      sql.sql("update ouf_ingestion.handoff_outbox set state='FAILED_TERMINAL',delivery_stop_reason='ING_HANDOFF_BUDGET_EXHAUSTED',last_error_code=coalesce(last_error_code,'ING_HANDOFF_BUDGET_EXHAUSTED'),lease_owner=null,lease_until=null where handoff_id=:h").param("h",id).update();
+      block((UUID)row.get("run_id"));return Optional.empty();
+    }
+    return sql.sql("""
+      update ouf_ingestion.handoff_outbox set state='DELIVERING',lease_owner=:w,
+        delivery_started_at=coalesce(delivery_started_at,clock_timestamp()),
+        lease_until=least(clock_timestamp()+(:ms * interval '1 millisecond'),
+                          coalesce((select deadline from ouf_ingestion.handoff_budget where handoff_id=:h),clock_timestamp()+interval '24 hours')),
+        attempts=attempts+1 where handoff_id=:h returning handoff_id,payload_json::text,idempotency_key,attempts
+      """).param("h",id).param("w",worker).param("ms",lease.toMillis())
+      .query((rs,n)->new ClaimedHandoff(rs.getObject(1,UUID.class),decode(rs.getString(2)),rs.getString(3),rs.getInt(4))).optional();
+  }
+
+  private void block(UUID run){
+    sql.sql("""
+      update ouf_ingestion.run_recovery_session g set state='EXHAUSTED' from ouf_ingestion.handoff_outbox h
+      where h.run_id=:r and g.session_id=h.delivery_session_id and g.state='ACTIVE'
+        and h.state='FAILED_TERMINAL' and h.delivery_stop_reason='ING_HANDOFF_BUDGET_EXHAUSTED'
+      """).param("r",run).update();
+    sql.sql("select ouf_ingestion.block_handoff(:r)").param("r",run).query().singleRow();
+  }
+
+  /** Serialize a late ACK or failure against the HUMAN disposition of its run. */
+  private boolean deliveryAllowed(UUID handoff){
+    return sql.sql("select r.state in ('RUNNING','DRAINING') from ouf_ingestion.ing_run r join ouf_ingestion.handoff_outbox h using(run_id) where h.handoff_id=:h for update of r")
+      .param("h",handoff).query(Boolean.class).optional().orElse(false);
   }
 
   /** Duplicate ACK is harmless. Watermark advances only across an ACK-complete prefix. */
   @Transactional
   public void acknowledge(UUID handoffId,String worker,String receipt){
-    int transitioned=sql.sql("update ouf_ingestion.handoff_outbox set state='ACKED',downstream_receipt_ref=:rr,acked_at=transaction_timestamp(),lease_owner=null,lease_until=null where handoff_id=:h and state='DELIVERING' and lease_owner=:w")
-      .param("rr",receipt).param("h",handoffId).param("w",worker).update();
+    int transitioned=deliveryAllowed(handoffId)?sql.sql("update ouf_ingestion.handoff_outbox set state='ACKED',downstream_receipt_ref=:rr,acked_at=transaction_timestamp(),lease_owner=null,lease_until=null where handoff_id=:h and state='DELIVERING' and lease_owner=:w and lease_until>clock_timestamp()")
+      .param("rr",receipt).param("h",handoffId).param("w",worker).update():0;
     if(transitioned==0){
       boolean alreadyAcked=sql.sql("select exists(select 1 from ouf_ingestion.handoff_outbox where handoff_id=:h and state='ACKED')").param("h",handoffId).query(Boolean.class).single();
       if(alreadyAcked)return;
@@ -85,9 +142,95 @@ public class DurablePipelineRepository {
 
   @Transactional
   public void retry(UUID handoffId,String worker,String safeCode,Duration delay,boolean terminal){
-    String state=terminal?"FAILED_TERMINAL":"FAILED_RETRYABLE";
-    sql.sql("update ouf_ingestion.handoff_outbox set state=:s,last_error_code=:c,next_attempt_at=transaction_timestamp()+(:ms * interval '1 millisecond'),lease_owner=null,lease_until=null where handoff_id=:h and state='DELIVERING' and lease_owner=:w")
-      .param("s",state).param("c",safeCode).param("ms",delay.toMillis()).param("h",handoffId).param("w",worker).update();
+    if(!deliveryAllowed(handoffId))return;
+    var rows=sql.sql("""
+      update ouf_ingestion.handoff_outbox set
+        state=case when :terminal or b.remaining<=0 or not b.authorized or clock_timestamp()+(:ms * interval '1 millisecond')>=b.deadline
+                 then 'FAILED_TERMINAL' else 'FAILED_RETRYABLE' end,
+        delivery_stop_reason=case when :terminal then 'ING_HANDOFF_DISPOSITION_REQUIRED'
+            when b.remaining<=0 or not b.authorized or clock_timestamp()+(:ms * interval '1 millisecond')>=b.deadline
+            then 'ING_HANDOFF_BUDGET_EXHAUSTED' end,
+        last_error_code=:c,next_attempt_at=case when :ms>3155760000000 then 'infinity'::timestamptz else clock_timestamp()+(:ms * interval '1 millisecond') end,
+        lease_owner=null,lease_until=null
+      from ouf_ingestion.handoff_budget b where b.handoff_id=:h and handoff_outbox.handoff_id=b.handoff_id
+        and state='DELIVERING' and lease_owner=:w and lease_until>clock_timestamp()
+      returning run_id,state
+      """).param("terminal",terminal).param("c",safeCode).param("ms",delay.getSeconds()>3155760000L?3155760000001L:delay.toMillis())
+      .param("h",handoffId).param("w",worker).query().listOfRows();
+    if(!rows.isEmpty() && "FAILED_TERMINAL".equals(rows.getFirst().get("state")))block((UUID)rows.getFirst().get("run_id"));
+  }
+
+  @Transactional public java.time.Instant acquiredAt(RunExecutionRepository.Claim c,long sequence,java.time.Instant now){
+    RunRecoveryBudget.requireCurrent(sql,c);
+    return sql.sql("""
+      update ouf_ingestion.ing_partition set record_acquired_at=case when lake_sequence=:seq
+        then record_acquired_at else :at end,lake_sequence=:seq
+      where run_id=:r and partition_key=:p and lease_owner=:w and lease_generation=:g
+        and lease_until>clock_timestamp() returning record_acquired_at
+      """).param("seq",sequence).param("at",now.atOffset(java.time.ZoneOffset.UTC)).param("r",c.runId())
+      .param("p",c.partitionKey()).param("w",c.worker()).param("g",c.generation())
+      .query(java.time.OffsetDateTime.class).optional().orElseThrow(()->new IllegalStateException("ING_PARTITION_LEASE_LOST")).toInstant();
+  }
+
+  /** Short transaction before I/O. Only a confirmed matching receipt can skip a write. */
+  @Transactional public LakeIntent beginLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash){
+    lockPartition(c.claim());
+    int inserted=sql.sql("""
+      insert into ouf_ingestion.lake_write_evidence(run_id,partition_key,sequence_no,effect,content_hash)
+      values(:r,:p,:seq,:effect,:hash) on conflict do nothing
+      """).param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo())
+      .param("effect",effect).param("hash",hash).update();
+    if(inserted==1)return new LakeIntent(true,hash,null,false);
+    var row=sql.sql("select content_hash,receipt_ref,(abort_required or human_review) blocked from ouf_ingestion.lake_write_evidence where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect")
+      .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).query().singleRow();
+    return new LakeIntent(false,(String)row.get("content_hash"),(String)row.get("receipt_ref"),
+        Boolean.TRUE.equals(row.get("blocked")));
+  }
+  public record LakeIntent(boolean fresh,String hash,String receipt,boolean blocked){}
+
+  public record PendingEffect(long sequence,String effect,boolean blocked){}
+  public List<PendingEffect> pendingEffects(RunExecutionRepository.Claim c){
+    return sql.sql("""
+        select sequence_no,effect,%1$s from ouf_ingestion.lake_write_evidence
+        where run_id=:r and partition_key=:p and (receipt_ref is null or %1$s)
+        order by sequence_no,effect limit 4
+        """.formatted(RecoveryPredicates.BLOCKED_LAKE_EFFECT)).param("r",c.runId()).param("p",c.partitionKey())
+        .query((rs,n)->new PendingEffect(rs.getLong(1),rs.getString(2),rs.getBoolean(3))).list();
+  }
+
+  @Transactional public void recordLakeFailure(RunExecutionRepository.Claim claim,long sequence,String effect,String cause,boolean blocked,boolean humanReview){
+    lockPartition(claim);
+    int changed=sql.sql("""
+        update ouf_ingestion.lake_write_evidence set cause_code=:cause,cause_at=clock_timestamp(),abort_required=:blocked,human_review=:review
+        where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect
+        """).param("cause",cause).param("blocked",blocked).param("review",humanReview).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+    if(changed!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
+    sql.sql("""
+        insert into ouf_ingestion.operational_event(severity,event_type,correlation_id,run_id,source_id,
+            resource_type,resource_id,error_code,detail_json)
+        select 'WARN','LAKE_WRITE_FAILURE',correlation_id,run_id,source_id,'RUN',run_id::text,:cause,
+            jsonb_build_object('partitionKey',cast(:p as text),'sequenceNo',cast(:seq as bigint),'effect',cast(:effect as text))
+        from ouf_ingestion.ing_run where run_id=:r
+        """).param("cause",cause).param("r",claim.runId()).param("p",claim.partitionKey())
+        .param("seq",sequence).param("effect",effect).update();
+
+  }
+
+  @Transactional public void finishLakeWrite(CanonicalRecordPipeline.Command c,String effect,String hash,String receipt){
+    lockPartition(c.claim());
+    String statement=receipt==null?"delete from ouf_ingestion.lake_write_evidence"
+      :"update ouf_ingestion.lake_write_evidence set receipt_ref=:receipt";
+    var query=sql.sql(statement+" where run_id=:r and partition_key=:p and sequence_no=:seq and effect=:effect and content_hash=:hash and receipt_ref is null")
+      .param("r",c.runId()).param("p",c.partitionKey()).param("seq",c.sequenceNo()).param("effect",effect).param("hash",hash);
+    if(receipt!=null)query=query.param("receipt",receipt);
+    if(query.update()!=1)throw new IllegalStateException("ING_LAKE_EVIDENCE_CONFLICT");
+  }
+
+  private void lockPartition(RunExecutionRepository.Claim c){
+    sql.sql("select 1 from ouf_ingestion.ing_partition where run_id=:r and partition_key=:p for update")
+      .param("r",c.runId()).param("p",c.partitionKey()).query(Integer.class).single();
+    RunRecoveryBudget.requireCurrent(sql,c);
   }
 
   public void requireRecoveryBudget(RunExecutionRepository.Claim claim){RunRecoveryBudget.requireCurrent(sql,claim);}
@@ -106,8 +249,8 @@ public class DurablePipelineRepository {
   }
 
   private String encode(Object value){try{return json.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalArgumentException("ING_JSON_INVALID",e);}}
-  @SuppressWarnings("unchecked") private Map<String,Object> decode(String value){try{return json.readValue(value,Map.class);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
-  public record ClaimedHandoff(UUID handoffId,Map<String,Object> payload,String idempotencyKey){}
+  private Map<String,Object> decode(String value){try{return handoffReader.readValue(value);}catch(JsonProcessingException e){throw new IllegalStateException("ING_STORED_JSON_INVALID",e);}}
+  public record ClaimedHandoff(UUID handoffId,Map<String,Object> payload,String idempotencyKey,int attempts){}
   public record StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark,RunExecutionRepository.Claim claim){
     public StageCommand(UUID runId,String partitionKey,long sequenceNo,String sourceObjectId,int attemptNo,String adapterId,String bundleVersion,String bundleRef,String idempotencyKey,Map<String,Object> payload,Map<String,Object> evidence,Map<String,Object> restartCheckpoint,Map<String,Object> candidateWatermark){this(runId,partitionKey,sequenceNo,sourceObjectId,attemptNo,adapterId,bundleVersion,bundleRef,idempotencyKey,payload,evidence,restartCheckpoint,candidateWatermark,null);}
   }

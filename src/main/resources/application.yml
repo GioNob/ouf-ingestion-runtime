@@ -13,6 +13,8 @@ management:
   endpoints.web.exposure.include: health,info,prometheus,metrics
   endpoint.health.probes.enabled: true
   endpoint.health.group.readiness.include: readinessState,ingestionReadiness
+  endpoint.health.group.readiness.show-components: always
+  endpoint.health.group.readiness.show-details: always
   health:
     livenessstate.enabled: true
     readinessstate.enabled: true
@@ -34,3 +36,6 @@ ouf.ingestion.gateway-read:
   audience: ${OUF_ING_GATEWAY_READ_AUDIENCE:}
   workload: ${OUF_ING_GATEWAY_READ_WORKLOAD:}
   key-file: ${OUF_ING_GATEWAY_READ_KEY_FILE:}
+
+ouf.ingestion.recovery:
+  human-decision-window: ${OUF_ING_RECOVERY_HUMAN_DECISION_WINDOW:PT24H}

@@ -33,7 +33,7 @@ class HttpGatewaySourceClientTest {
 
   @Test void classifies429AndHonorsDeltaSecondsRetryAfter(){
     respond(429,"limited",Map.of("Retry-After","90"));var failure=catchThrowableOfType(()->fetch(client(1000)),RuntimePorts.GatewayFailure.class);
-    assertThat(failure.safeCode()).isEqualTo("ING_GATEWAY_429");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.TRANSIENT_SOURCE);assertThat(failure.retryAfter()).contains(Duration.ofSeconds(90));
+    assertThat(failure.safeCode()).isEqualTo("ING_GATEWAY_429");assertThat(failure.errorClass()).isEqualTo(AdapterSpi.ErrorClass.TRANSIENT_SOURCE);assertThat(failure.retryAfter().orElseThrow()).isBetween(Duration.ofSeconds(90),Duration.ofSeconds(108));
   }
 
   @Test void classifies503AsTransient(){
@@ -75,7 +75,7 @@ class HttpGatewaySourceClientTest {
   private void fetch(HttpGatewaySourceClient client){client.fetch("gateway://rest/objects",Map.of("pageSize",10),"corr-1");}
   private HttpGatewaySourceClient client(long timeoutMs){return client(endpoint(),timeoutMs,1_000_000);}
   private URI endpoint(){return URI.create("http://"+server.getAddress().getHostString()+":"+server.getAddress().getPort()+"/fetch");}
-  private HttpGatewaySourceClient client(URI endpoint,long timeoutMs,int maxBytes){return new HttpGatewaySourceClient(HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build(),endpoint,json,Duration.ofMillis(timeoutMs),maxBytes,Clock.fixed(Instant.parse("2026-09-14T00:00:00Z"),ZoneOffset.UTC));}
+  private HttpGatewaySourceClient client(URI endpoint,long timeoutMs,int maxBytes){return new HttpGatewaySourceClient(HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build(),endpoint,json,Duration.ofMillis(timeoutMs),maxBytes,new GatewayPacing(k->null));}
   private void respond(int status,String body){respond(status,body,Map.of());}
   private void respond(int status,String body,Map<String,String> headers){response.set(new Response(status,body.getBytes(StandardCharsets.UTF_8),headers,0));}
   private static ExecutionBundle bundle(){return new ExecutionBundle("b","1","h","s","REST_JSON","gateway://rest/objects",Map.of("identityFields",List.of("id"),"typeCode","OBJECT","pageSize",10));}

@@ -1,0 +1,311 @@
+package it.comune.trieste.ouf.ingestion;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static it.comune.trieste.ouf.ingestion.ConfiguredValueTransform.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
+import java.util.*;
+import org.junit.jupiter.api.Test;
+
+class ConfiguredValueMappingTest {
+  private static final String SET = "62aaefce-9199-4698-b899-30f0968cba56";
+  private static final String OUT = "urn:target";
+  private static final String A = "urn:type:a@" + SET, B = "urn:type:b@" + SET;
+  private static final String MAP = "urn:map@" + SET, VOCAB = "urn:vocabulary";
+  private static Map<String,Object> expr(String name, String reader) {
+    return Map.of("fieldName", name, "reader", reader);
+  }
+  private static Map<String,Object> with(Map<String,Object> map, String key, Object value) {
+    var copy = new LinkedHashMap<>(map); copy.put(key,value); return copy;
+  }
+  @SafeVarargs
+  private static Map<String,Object> ctor(String id, Map<?,?> params, Map<String,Object>... inputs) {
+    return Map.of("constructorId",id,"params",params,"inputs",Arrays.asList(inputs));
+  }
+  private static Map<String,Object> root(String kind, Map<String,Object> body) {
+    return with(with(with(body,"kind",kind),"targetPropertyIri",OUT),"dataAccessLabel","OPEN");
+  }
+  private static Map<String,Object> schema(String name, String type, boolean required, String cardinality) {
+    return Map.of("name",name,"type",type,"required",required,"cardinality",cardinality);
+  }
+  private static Map<String,Object> pin(String ref, List<?> components) {
+    var definition = Map.of("components",components);
+    return Map.of("semanticId",ref.substring(0,ref.lastIndexOf('@')),"publicationSetId",SET,
+        "definition",definition,"definitionSha256",ValuePins.digest(definition));
+  }
+  private static ConfiguredValueMapping mapping(ValuePins pins, Map<String,Object> expression) {
+    return new ConfiguredValueMapping(Map.of("compositions",List.of(expression),
+        "expectedFieldNames",List.of("x","y","z")),pins);
+  }
+  private static void bad(Runnable action, String code) {
+    var error = assertThrows(IllegalArgumentException.class,action::run);
+    assertEquals(code,error.getMessage());
+    assertNull(error.getCause());
+  }
+
+  @Test void exactReadersAndSafeLexicalFailures() {
+    assertEquals("é",TEXT_NFC_TRIM_V1.apply(" e\u0301 ",1));
+    assertEquals("-987654321098765432109876543210",INTEGER_V1.apply(" -00987654321098765432109876543210 ",1));
+    assertEquals("-987654321",INTEGER_GROUP_DOT_V1.apply("-987.654.321",1));
+    assertEquals("1234567.89",DECIMAL_GROUP_DOT_COMMA_V1.apply("+1.234.567,890",1));
+    assertEquals("1234567.89",DECIMAL_GROUP_COMMA_DOT_V1.apply("1,234,567.890",1));
+    for (var t : List.of("SÌ"," SI ","S","Vero","v","true","1")) assertEquals(true,BOOLEAN_IT_V1.apply(t,1));
+    for (var t : List.of("NO","N","Falso","F","false","0")) assertEquals(false,BOOLEAN_IT_V1.apply(t,1));
+    assertEquals("2024-02-29",DATE_DMY_DASH_V1.apply("29-02-2024",1));
+    assertEquals("2024-02-28T21:15:00Z",DATETIME_ISO_OFFSET_V1.apply("2024-02-28T22:15+01:00",1));
+    assertEquals("2024-02-28T22:15:01.123456789Z",DATETIME_ISO_OFFSET_V1.apply("2024-02-28T22:15:01.123456789Z",1));
+    assertEquals("2024-07-01T10:00:00Z",DATETIME_LOCAL_ROME_V1.apply("2024-07-01 12:00",1));
+    for (var t : List.of("2024-03-31T02:30","2024-10-27T02:30","2024-07-01T12:00Z"))
+      bad(()->DATETIME_LOCAL_ROME_V1.apply(t,1),"ING_TRANSFORM_VALUE_INVALID");
+    for (var rule : List.of(INTEGER_V1,INTEGER_GROUP_DOT_V1,BOOLEAN_IT_V1,DATE_DMY_DASH_V1,DATETIME_ISO_OFFSET_V1,
+        DECIMAL_GROUP_DOT_COMMA_V1,DECIMAL_GROUP_COMMA_DOT_V1)) {
+      bad(()->rule.apply("private-cell",1),"ING_TRANSFORM_VALUE_INVALID");
+      assertNull(rule.apply("  ",1));
+    }
+    bad(()->DECIMAL_GROUP_DOT_COMMA_V1.apply("1234,56",1),"ING_TRANSFORM_VALUE_INVALID");
+    bad(()->INTEGER_GROUP_DOT_V1.apply("123.45",1),"ING_TRANSFORM_VALUE_INVALID");
+  }
+
+  @Test void geometryReadersPreserveNumbersAndRejectMalformedGeometries() throws Exception {
+    var json = new ObjectMapper();
+    var wkt = WKT_V1.bind(Map.of("crs","EPSG:3857"),ValuePins.EMPTY);
+    assertEquals("{\"crs\":\"EPSG:3857\",\"geoJson\":{\"type\":\"Point\",\"coordinates\":[100,200]}}",
+        json.writeValueAsString(wkt.apply("POINT(100.0000000000000001 200)",1)));
+    for (String w : List.of("MULTIPOINT ((1 2),(3 4))","MULTILINESTRING ((1 2,3 4))",
+        "MULTIPOLYGON (((0 0,1 0,1 1,0 0)))","GEOMETRYCOLLECTION (POINT EMPTY,LINESTRING (0 0,1 1))"))
+      assertNotNull(wkt.apply(w,1));
+    assertEquals("{\"crs\":\"EPSG:4326\",\"geoJson\":{\"type\":\"Point\",\"coordinates\":[1,2]}}",
+        json.writeValueAsString(GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1,2]}",1)));
+    for (String w : List.of("POINT(1 2) trailing","POINT(1)","LINESTRING(1 2)","POLYGON ((0 0,1 0,1 1,0 1))","POINT M(1 2 3)"))
+      bad(()->wkt.apply(w,1),"ING_TRANSFORM_VALUE_INVALID");
+    for (String g : List.of("null","{\"type\":\"Feature\"}","{\"type\":\"LineString\",\"coordinates\":[[1,2]]}",
+        "{\"type\":\"GeometryCollection\",\"geometries\":[null]}",
+        "{\"type\":\"Point\",\"coordinates\":[1,true]}","{\"type\":\"Point\",\"coordinates\":[1,2],\"properties\":{}}",
+        "{\"type\":\"Point\",\"coordinates\":[1,2]} {}"))
+      bad(()->GEOJSON_V1.apply(g,1),"ING_TRANSFORM_VALUE_INVALID");
+    bad(()->WKT_V1.bind(Map.of(),ValuePins.EMPTY),"ING_TRANSFORM_PARAMS_INVALID");
+  }
+
+  @Test void geometryUsesShortestBinary64CoordinatesAtDecimalAndExponentBoundaries() throws Exception {
+    var json = new ObjectMapper();
+    var wkt = WKT_V1.bind(Map.of("crs","EPSG:4326"),ValuePins.EMPTY);
+    var source = "LINESTRING Z(-0.00 0.000001 4.9e-324,1e-7 1e21 9007199254740993)";
+    var geometry = wkt.apply(source,1);
+    assertEquals("{\"crs\":\"EPSG:4326\",\"geoJson\":{\"type\":\"LineString\","
+        + "\"coordinates\":[[0,0.000001,5e-324],[1e-7,1e+21,9007199254740992]]}}", json.writeValueAsString(geometry));
+    assertEquals(geometry, GEOJSON_V1.apply("""
+        {"type":"LineString","coordinates":[[-0.00,0.000001,4.9e-324],[1e-7,1e21,9007199254740993]]}
+        """,1));
+    var coordinates = json.valueToTree(geometry).at("/geoJson/coordinates");
+    assertEquals(Double.MIN_VALUE,coordinates.get(0).get(2).doubleValue());
+    assertEquals(1e21,coordinates.get(1).get(1).doubleValue());
+    bad(() -> wkt.apply("POINT (1e309 0)",1),"ING_TRANSFORM_VALUE_INVALID");
+    bad(() -> GEOJSON_V1.apply("{\"type\":\"Point\",\"coordinates\":[1e309,0]}",1),"ING_TRANSFORM_VALUE_INVALID");
+  }
+
+  @Test void wktRejectsMeasureOrdinatesWithSafeRowError() {
+    var wkt = WKT_V1.bind(Map.of("crs","EPSG:4326"),ValuePins.EMPTY);
+    assertNotNull(wkt.apply("POINT Z (1 2 3)",7));
+    for (String text : List.of("POINT M (1 2 3)","POINT ZM (1 2 3 4)","POINT M EMPTY",
+        "GEOMETRYCOLLECTION (POINT ZM (1 2 3 4))")) {
+      var error = assertThrows(ConfiguredValueTransform.InvalidValue.class,() -> wkt.apply(text,7));
+      assertEquals("ING_TRANSFORM_VALUE_INVALID",error.getMessage());
+      assertEquals(7L,error.rowOrdinal());
+      assertNull(error.getCause());
+    }
+  }
+
+  @Test void pointJoinAndLiteralSplitUseDeclaredRolesAndAbsence() {
+    var lon = with(expr("x","DECIMAL_COMMA_V1"),"role","lon");
+    var lat = with(expr("y","DECIMAL_DOT_V1"),"role","lat");
+    var point = mapping(ValuePins.EMPTY,root("CONSTRUCTOR",ctor("POINT_FROM_LAT_LON_V1",Map.of(),lon,lat)));
+    assertEquals(Map.of(OUT,ValueGeometry.point(new BigDecimal("-180"),new BigDecimal("90"))),
+        point.apply(Map.of("x","-180,0","y","90"),1));
+    assertEquals(Map.of(),point.apply(Map.of("x"," ","y",""),1));
+    for (var value : List.of("91","")) bad(()->point.apply(Map.of("x","1","y",value),1),"ING_TRANSFORM_VALUE_INVALID");
+    var join = mapping(ValuePins.EMPTY,root("CONSTRUCTOR",ctor("TEXT_JOIN_V1",Map.of("separator"," / "),
+        with(expr("y","TEXT_NFC_TRIM_V1"),"role","part"),with(expr("x","TEXT_NFC_TRIM_V1"),"role","part"))));
+    assertEquals(Map.of(OUT,"b / a"),join.apply(Map.of("x","a","y","b"),1));
+    assertEquals(Map.of(OUT,"a"),join.apply(Map.of("x","a","y"," "),1));
+    assertEquals(Map.of(),join.apply(Map.of("x","","y"," "),1));
+    var split = mapping(ValuePins.EMPTY,root("CONSTRUCTOR",split(Map.of("separator",".","itemReader","INTEGER_V1"))));
+    assertEquals(Map.of(OUT,List.of("1","2")),split.apply(Map.of("x","01..+2."),1));
+    assertEquals(Map.of(),split.apply(Map.of("x","..."),1));
+    var geom = mapping(ValuePins.EMPTY,root("CONSTRUCTOR",split(Map.of("separator","|","itemReader","WKT_V1",
+        "itemReaderParams",Map.of("crs","EPSG:3857")))));
+    assertEquals(Map.of(OUT,List.of(WKT_V1.bind(Map.of("crs","EPSG:3857"),ValuePins.EMPTY).apply("POINT(1 2)",1))),
+        geom.apply(Map.of("x","POINT(1 2)|"),1));
+  }
+  private static Map<String,Object> split(Map<?,?> params) {
+    return ctor("LIST_SPLIT_V1",params,with(expr("x","IDENTITY"),"role","value"));
+  }
+
+  @Test void genericNestedManyUsesOnlyPinnedDefinitions() {
+    var parent = pin(A,List.of(schema("points",B,true,"MANY"),
+        with(schema("ids","integer",false,"MANY"),"constraints",Map.of("maxInclusive","2"))));
+    var child = pin(B,List.of(with(schema("name","string",false,"ONE"),"constraints",Map.of("maxLength",1))));
+    var pins = ValuePins.embedded(List.of(child,parent));
+    var nested = new ArrayList<Map<String,Object>>();
+    for (String field : List.of("y","z")) nested.add(Map.of("structured",Map.of("typeRef",B,"components",
+        List.of(with(expr(field,"TEXT_NFC_TRIM_V1"),"component","name")))));
+    var structure = Map.<String,Object>of("typeRef",A,"components",List.of(
+        Map.of("component","points","items",nested),Map.of("component","ids","constructor",split(Map.of("separator","|","itemReader","INTEGER_V1")))));
+    var mapper = mapping(pins,root("STRUCTURED",structure));
+    assertEquals(Map.of(OUT,Map.of("points",List.of(Map.of("name","😀")),"ids",List.of("1","2"))),
+        mapper.apply(Map.of("x","+1|2","y","😀","z"," "),1));
+    for (var row : List.of(Map.of("x","3","y","a","z",""),Map.of("x","","y","","z",""),
+        Map.of("x","","y","ab","z",""))) bad(()->mapper.apply(row,4),"ING_TRANSFORM_VALUE_INVALID");
+    bad(()->mapping(pins,root("STRUCTURED",with(structure,"components",List.of(with(expr("x","IDENTITY"),"component","unknown"))))),
+        "ING_VALUE_DEFINITION_INVALID");
+    bad(()->mapping(pins,root("STRUCTURED",with(structure,"components",List.of(with(expr("x","INTEGER_V1"),"component","ids"))))),
+        "ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(parent)),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(pin(A,List.of(schema("loop",A,false,"ONE"))))),"ING_VALUE_DEFINITION_INVALID");
+  }
+
+  @Test void registryAndEmbeddedDigestsMustBothMatch() {
+    var first = pin(A,List.of(schema("x","string",true,"ONE")));
+    var second = pin(A,List.of(schema("x","integer",true,"ONE")));
+    var resolved = with(first,"artifact_type","DATATYPE");
+    ValuePins.verifyBinding(first,resolved);
+    for (var changed : List.of(second,with(first,"definitionSha256","0".repeat(64)))) {
+      bad(()->ValuePins.verifyBinding(changed,resolved),"ING_VALUE_DEFINITION_INVALID");
+      bad(()->ValuePins.verifyBinding(first,with(changed,"artifact_type","DATATYPE")),"ING_VALUE_DEFINITION_INVALID");
+    }
+    var corrupt = with(first,"definitionSha256","0".repeat(64));
+    bad(()->ValuePins.verifyBinding(corrupt,with(corrupt,"artifact_type","DATATYPE")),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(corrupt)),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.verifyBinding(first,with(first,"artifact_type","PROPERTY")),"ING_VALUE_DEFINITION_INVALID");
+    for (Object bound : List.of(1,"1.00","+1","1e1"))
+      bad(()->ValuePins.embedded(List.of(pin(A,List.of(with(schema("x","decimal",false,"ONE"),"constraints",Map.of("minInclusive",bound)))))),
+          "ING_VALUE_DEFINITION_INVALID");
+  }
+
+  @Test void definitionLimitsAndBuildersFailBeforeReadingCells() {
+    String c="urn:type:c@"+SET, d="urn:type:d@"+SET, e="urn:type:e@"+SET;
+    var wide=new ArrayList<Map<String,Object>>();
+    for(int i=0;i<32;i++) wide.add(schema("v"+i,"string",false,"ONE"));
+    var branches=new ArrayList<Map<String,Object>>();
+    for(int i=0;i<8;i++) branches.add(schema("b"+i,B,false,"ONE"));
+    assertNotNull(ValuePins.embedded(List.of(pin(A,branches),pin(B,wide))));
+    branches.add(schema("overflow",B,false,"ONE"));
+    bad(()->ValuePins.embedded(List.of(pin(A,branches),pin(B,wide))),"ING_VALUE_DEFINITION_INVALID");
+    wide.add(schema("extra","string",false,"ONE"));
+    bad(()->ValuePins.embedded(List.of(pin(A,wide))),"ING_VALUE_DEFINITION_INVALID");
+    var chain=List.of(pin(A,List.of(schema("b",B,false,"ONE"))),pin(B,List.of(schema("c",c,false,"ONE"))),
+        pin(c,List.of(schema("d",d,false,"ONE"))),pin(d,List.of(schema("e",e,false,"ONE"))),
+        pin(e,List.of(schema("v","string",false,"ONE"))));
+    bad(()->ValuePins.embedded(chain),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->mapping(ValuePins.EMPTY,root("CONSTRUCTOR",ctor("TEXT_JOIN_V1",Map.of("separator"," "),
+        with(expr("notIncluded","IDENTITY"),"role","part"),with(expr("x","IDENTITY"),"role","part")))),
+        "ING_MAPPING_SOURCE_FIELD_MISSING");
+    bad(()->mapping(ValuePins.EMPTY,root("CONSTRUCTOR",split(Map.of("separator","|","itemReader","WKT_V1")))),
+        "ING_TRANSFORM_PARAMS_INVALID");
+  }
+
+  @Test void valueMapMembershipFollowsTheItemReaderAndExactPin() {
+    var spec = with(schema("codes","concept",true,"MANY"),"constraints",Map.of("vocabularyRef",VOCAB));
+    var datatype = pin(A,List.of(spec));
+    var header = Map.<String,Object>of("semanticId","urn:map","valueMapRef",MAP,"publicationSetId",SET,"vocabularyRef",VOCAB);
+    bad(()->ValuePins.embedded(List.of(header)).valueMap(MAP),"ING_VALUE_MAP_CONTENT_REQUIRED");
+    var entries = List.of(Map.of("code","01","concept","urn:c:one"),Map.of("code","02","concept","urn:c:two"));
+    var embedded = valueMapPin(VOCAB,entries);
+    var pins = ValuePins.embedded(List.of(datatype,embedded));
+    var params = Map.of("separator",";","itemReader","VALUE_MAP_V1","itemReaderParams",Map.of("valueMapRef",MAP));
+    var expression = root("STRUCTURED",Map.of("typeRef",A,"components",List.of(Map.of("component","codes","constructor",split(params)))));
+    assertEquals(Map.of(OUT,Map.of("codes",List.of("urn:c:two","urn:c:one"))),
+        mapping(pins,expression).apply(Map.of("x"," 02; ;01"),2));
+    var concept = Map.<String,Object>of("semanticId","urn:c:one","publicationSetId",SET,"definition",Map.of("vocabularyRef",VOCAB));
+    ValuePins.verifyBinding(concept,with(concept,"artifact_type","CONCEPT"));
+    var fallback = ValuePins.embedded(List.of(datatype,valueMapPin("urn:other",entries),concept));
+    assertEquals(Map.of(OUT,Map.of("codes",List.of("urn:c:one"))),mapping(fallback,expression).apply(Map.of("x","01"),2));
+    bad(()->mapping(fallback,expression).apply(Map.of("x","02"),2),"ING_TRANSFORM_VALUE_INVALID");
+    bad(()->mapping(pins,expression).apply(Map.of("x","private-cell"),2),"ING_TRANSFORM_VALUE_INVALID");
+    bad(()->VALUE_MAP_V1.bind(Map.of("valueMapRef","urn:unbound"),pins),"ING_VALUE_MAP_PIN_REQUIRED");
+    var property = Map.<String,Object>of("sourceField","x","targetPropertyIri",OUT,"transform","VALUE_MAP_V1","valueMapRef",MAP);
+    assertEquals(Map.of(OUT,"urn:c:one"),new ConfiguredValueMapping(Map.of("propertyMappings",List.of(property)),pins)
+        .apply(Map.of("x","01"),2));
+    assertEquals(pins.valueMap(MAP),pins.valueMap("urn:map"));
+    var ambiguous = ValuePins.embedded(List.of(embedded,Map.of("semanticId","urn:map","publicationSetId",new UUID(0,2).toString())));
+    bad(()->ambiguous.valueMap("urn:map"),"ING_VALUE_MAP_PIN_REQUIRED");
+    bad(()->ValuePins.embedded(List.of(with(embedded,"valueMapRef","wrong"))),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->ValuePins.embedded(List.of(with(embedded,"targetVocabulary","urn:other@"+SET))),"ING_VALUE_DEFINITION_INVALID");
+    bad(()->new ConfiguredValueMapping(Map.of("propertyMappings",List.of(with(property,"transformParams",Map.of("valueMapRef","other")))),pins),
+        "ING_TRANSFORM_PARAMS_INVALID");
+  }
+
+  @Test void publishedValueMapEnforcesCanonicalEntriesAndBounds() {
+    var upper = Map.<String,Object>of("code","A","concept","urn:concept");
+    var lower = Map.<String,Object>of("code","a","concept","urn:lower");
+    var supplementary = with(upper,"code","\uD83D\uDE00");
+    var bmp = with(upper,"code","\uE000");
+    var pin = valueMapPin(VOCAB,List.of(upper,lower,supplementary,bmp));
+    var reader = VALUE_MAP_V1.bind(Map.of("valueMapRef",MAP),ValuePins.embedded(List.of(pin)));
+    assertEquals("urn:concept",reader.apply(" A ",1));
+    assertEquals("urn:lower",reader.apply("a",1));
+    assertEquals("urn:concept",reader.apply("\uD83D\uDE00",1));
+    assertNull(reader.apply("  ",1));
+    var unknown = assertThrows(ConfiguredValueTransform.InvalidValue.class,() -> reader.apply("private-unmapped",33));
+    assertEquals("ING_TRANSFORM_VALUE_INVALID",unknown.getMessage());
+    assertEquals(33L,unknown.rowOrdinal());
+    assertNull(unknown.getCause());
+
+    var maximum = java.util.stream.IntStream.range(1000,3000)
+        .mapToObj(n -> Map.of("code",Integer.toString(n),"concept","urn:concept")).toList();
+    assertEquals(2000,ValuePins.embedded(List.of(valueMapPin(VOCAB,maximum))).valueMap(MAP).entries().size());
+    var tooMany = new ArrayList<>(maximum);
+    tooMany.add(Map.of("code","3000","concept","urn:concept"));
+    for (var entries : List.<List<?>>of(List.of(),tooMany,List.of(upper,upper),List.of(lower,upper),List.of(bmp,supplementary),
+        List.of(with(upper,"code","\u00a0A")),List.of(with(upper,"code","a\u007F")),List.of(with(upper,"code","a\u0081")),
+        List.of(with(upper,"code","a\u009F")),List.of(with(upper,"code","x".repeat(129))),
+        List.of(with(upper,"concept","urn:"+"x".repeat(509))),
+        List.of(with(upper,"concept","relative")),List.of(with(upper,"extra",true)))) {
+      bad(() -> ValuePins.embedded(List.of(valueMapPin(VOCAB,entries))),"ING_VALUE_DEFINITION_INVALID");
+    }
+    bad(() -> ValuePins.embedded(List.of(with(pin,"definitionSha256","0".repeat(64)))),"ING_VALUE_DEFINITION_INVALID");
+  }
+
+  private static Map<String,Object> valueMapPin(String vocabulary,List<?> entries) {
+    var target = vocabulary+"@"+new UUID(0,7);
+    var definition = Map.of("targetVocabulary",target,"entries",entries,"labels",Map.of("it","Valori"));
+    return valueMapPin("urn:map", definition);
+  }
+
+  private static Map<String,Object> valueMapPin(String id, Map<String,Object> definition) {
+    return Map.of("semanticId",id,"publicationSetId",SET,"valueMapRef",id+"@"+SET,"targetVocabulary",definition.get("targetVocabulary"),
+        "revisionId",new UUID(0,8).toString(),"definition",definition,"definitionSha256",ValuePins.digest(definition));
+  }
+
+  @Test void publishedValueMapsEnforceCanonicalUtf8ByteLimitsPerDefinitionAndBundle() {
+    var first = sizedValueMapPin("urn:map", 786_432);
+    var second = sizedValueMapPin("urn:other", 262_144);
+    assertEquals("urn:concept", ValuePins.embedded(List.of(first,second)).valueMap(MAP).entries().get("A"));
+    bad(() -> ValuePins.embedded(List.of(first,sizedValueMapPin("urn:other", 262_145))),"ING_VALUE_MAP_LIMIT_EXCEEDED");
+    bad(() -> ValuePins.embedded(List.of(sizedValueMapPin("urn:map", 786_433))),"ING_VALUE_DEFINITION_INVALID");
+  }
+
+  private static Map<String,Object> sizedValueMapPin(String id, int bytes) {
+    String target = VOCAB+"@"+new UUID(0,7);
+    String empty = "{\"entries\":[{\"code\":\"A\",\"concept\":\"urn:concept\"}],\"labels\":{\"it\":\"\"},\"targetVocabulary\":\""+target+"\"}";
+    int labelBytes = bytes - empty.length(); // The fixed part is ASCII.
+    String label = "\uD83D\uDE00".repeat(labelBytes / 4) + "x".repeat(labelBytes % 4);
+    var definition = Map.<String,Object>of("targetVocabulary",target,"entries",List.of(Map.of("code","A","concept","urn:concept")),
+        "labels",Map.of("it",label));
+    return valueMapPin(id, definition);
+  }
+
+  @Test void canonicalBoundsApplyChronologicallyAndNumerically() {
+    var bounds=Map.of("minInclusive","2026-01-01T00:00:00.1Z","maxInclusive","2026-01-01T00:00:00.2Z");
+    var fields=List.of(with(schema("time","datetime",true,"ONE"),"constraints",bounds),
+        with(schema("quantity","decimal",true,"ONE"),"constraints",Map.of("minInclusive","-10","maxInclusive","2")),
+        with(schema("day","date",true,"ONE"),"constraints",Map.of("minInclusive","2026-01-01")));
+    var pins=ValuePins.embedded(List.of(pin(A,fields)));
+    var mapping=mapping(pins,root("STRUCTURED",Map.of("typeRef",A,"components",List.of(
+        with(expr("x","DATETIME_ISO_OFFSET_V1"),"component","time"),with(expr("y","DECIMAL_DOT_V1"),"component","quantity"),
+        with(expr("z","DATE_ISO_V1"),"component","day")))));
+    var row=Map.<String,Object>of("x","2026-01-01T01:00:00.100+01:00","y","-010.00","z","2026-01-01");
+    assertEquals(Map.of(OUT,Map.of("time","2026-01-01T00:00:00.100Z","quantity","-10","day","2026-01-01")),mapping.apply(row,2));
+    for(var rejected:List.of(with(row,"x","2026-01-01T00:00:00.201Z"),with(row,"y","20"),with(row,"z","2025-12-31")))
+      bad(()->mapping.apply(rejected,2),"ING_TRANSFORM_VALUE_INVALID");
+  }
+}
